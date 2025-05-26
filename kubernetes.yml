@@ -1,0 +1,152 @@
+---
+# This NetworkAttachmentDefinition uses Multus to create a macvlan interface with a static IP for the domain controller.
+# Remove if you've already catered for this elsewhere in the your cluster.
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: macvlan-network # Reference this name in pod annotations to request this network
+spec:
+  # Replace "eth0" with your actual host network interface name.
+  # "address" sets the static IP address for the domain controller,
+  # and "gateway" set your network's default gateway/router IP address.
+  config: |-
+    {
+      "cniVersion": "0.3.1",
+      "name": "macvlan-network",
+      "type": "macvlan",
+      "mode": "bridge",
+      "master": "eth0",
+      "ipam": {
+        "type": "static",
+        "addresses": [
+          {
+            "address": "192.168.1.1/24",
+            "gateway": "192.168.1.254"
+          }
+        ]
+      }
+    }
+---
+# This headless Service is used by the StatefulSet to provide stable DNS for the pod.
+apiVersion: v1
+kind: Service
+metadata:
+  name: domain-controller-svc
+  annotations:
+    # "macvlan-network" should match a NetworkAttachmentDefinition you have created,
+    # and "192.168.1.1" is the desired static IP on your local network.
+    k8s.v1.cni.cncf.io/networks: '[{ "name": "macvlan-network", "ips": ["192.168.1.1"] }]'
+spec:
+  clusterIP: None # Headless service for StatefulSet.
+  selector:
+    app: domain-controller
+  ports:
+    - name: http
+      port: 9000 # Change if your application uses different ports.
+      targetPort: 9000
+---
+# The StatefulSet defines a single replica of your domain controller with persistent volumes.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: domain-controller
+spec:
+  serviceName: domain-controller-svc
+  replicas: 1
+  selector:
+    matchLabels:
+      app: domain-controller
+  template:
+    metadata:
+      labels:
+        app: domain-controller
+      annotations:
+        # Annotation to request a static IP via Multus.
+        # Update network name and desired IP as needed.
+        k8s.v1.cni.cncf.io/networks: '[{ "name": "macvlan-network", "ips": ["192.168.1.1"] }]'
+    spec:
+      containers:
+        - name: domain-controller
+          image: gmouzourou/domain-in-a-box:latest
+          securityContext:
+            privileged: true
+          env:
+            - name: REALM # Update with your Kerberos/AD realm.
+              value: "HOME.ARPA"
+            - name: DOMAIN # Update with your short domain name.
+              value: "HOME"
+            - name: DOMAIN_PASSWORD # Set your initial domain administrator password.
+              value: "P@ssw0rd"
+            - name: HOSTNAME # Set the pod’s hostname.
+              value: "domain-server"
+            - name: DHCP_POOL # Define the DHCP lease pool; adjust as needed.
+              value: "192.168.1.100-192.168.1.200"
+            - name: DNS_FORWARDERS # Upstream DNS servers; adjust as needed.
+              value: "1.1.1.1; 8.8.8.8;"
+          ports:
+            - containerPort: 9000 # Change to the port your app exposes.
+          volumeMounts:
+            - name: bind-config # Mount for BIND configuration files.
+              mountPath: /etc/bind
+            - name: bind-data # Mount for BIND data files.
+              mountPath: /var/bind
+            - name: kea-config # Mount for Kea DHCP configuration files.
+              mountPath: /etc/kea
+            - name: kea-data # Mount for Kea DHCP persistent data.
+              mountPath: /var/lib/kea
+            - name: samba-config # Mount for Samba configuration files.
+              mountPath: /etc/samba
+            - name: samba-data # Mount for Samba persistent data.
+              mountPath: /var/lib/samba
+            - name: log-data # Mount for log data.
+              mountPath: /var/log
+  volumeClaimTemplates:
+    - metadata:
+        name: bind-config # PVC for bind-config; adjust storage size if needed.
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+    - metadata:
+        name: bind-data # PVC for bind-data.
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+    - metadata:
+        name: kea-config # PVC for kea-config.
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+    - metadata:
+        name: kea-data # PVC for kea-data.
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+    - metadata:
+        name: samba-config # PVC for samba-config.
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+    - metadata:
+        name: samba-data # PVC for samba-data.
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+    - metadata:
+        name: log-data # PVC for log-data.
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

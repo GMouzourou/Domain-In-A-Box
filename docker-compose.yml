@@ -1,0 +1,51 @@
+services:
+  domain-controller:
+    image: gmouzourou/domain-in-a-box:latest
+    container_name: domain-in-a-box
+    privileged: true
+    networks:
+      domain_net:
+        # Set the static IP address for the domain controller – ensure it fits your network plan
+        ipv4_address: 192.168.1.1
+    environment:
+      # REALM: Specify your Kerberos/AD realm
+      REALM: "HOME.ARPA"
+      # DOMAIN: Specify your short domain name
+      DOMAIN: "HOME"
+      # Change this to set your initial domain administrator password
+      DOMAIN_PASSWORD: "P@ssw0rd"
+      # HOSTNAME: Set the hostname for your domain controller
+      HOSTNAME: "domain-server"
+      # DHCP_POOL: Define the DHCP range to lease addresses from; adjust as needed
+      DHCP_POOL: "192.168.1.100-192.168.1.200"
+      # DNS_FORWARDERS: Set your upstream DNS servers (separated by semicolons)
+      DNS_FORWARDERS: "1.1.1.1; 8.8.8.8;"
+    volumes:
+      # These volumes persist configuration and data; adjust if you want to bind mount host directories
+      - bind-config:/etc/bind
+      - bind-data:/var/bind
+      - kea-config:/etc/kea
+      - kea-data:/var/lib/kea
+      - samba-config:/etc/samba
+      - samba-data:/var/lib/samba
+      - log-data:/var/log
+
+networks:
+  domain_net:
+    driver: macvlan
+    driver_opts:
+      # Replace "eth0" with your actual host network interface name
+      parent: eth0
+    ipam:
+      config:
+        - subnet: "192.168.1.0/24" # Adjust to match your local network subnet
+          gateway: "192.168.1.254" # Set this to your network's gateway
+
+volumes:
+  bind-config:
+  bind-data:
+  kea-config:
+  kea-data:
+  samba-config:
+  samba-data:
+  log-data:
