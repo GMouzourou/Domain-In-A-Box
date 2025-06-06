@@ -17,7 +17,7 @@ IP=$(ip addr show dev eth0 | awk '/inet / { split($2, a, "/"); print a[1]; exit 
 
 # Configure Hostname
 echo "Setting hostname to ${HOSTNAME}"
-hostname "${HOSTNAME}"
+hostname set-hostname "${HOSTNAME}"
 
 # Configure resolv.conf
 echo "Writing /etc/resolv.conf..."
