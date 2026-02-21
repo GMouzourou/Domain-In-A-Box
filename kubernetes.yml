@@ -27,6 +27,15 @@ spec:
       }
     }
 ---
+# Create a Secret for the domain administrator password before applying in real environments.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: domain-in-a-box-secret
+type: Opaque
+stringData:
+  domain-password: "CHANGE_ME_BEFORE_APPLYING"
+---
 # This headless Service is used by the StatefulSet to provide stable DNS for the pod.
 apiVersion: v1
 kind: Service
@@ -75,8 +84,11 @@ spec:
               value: "HOME.ARPA"
             - name: DOMAIN # Update with your short domain name.
               value: "HOME"
-            - name: DOMAIN_PASSWORD # Set your initial domain administrator password.
-              value: "P@ssw0rd"
+            - name: DOMAIN_PASSWORD # Set your initial domain administrator password via Secret.
+              valueFrom:
+                secretKeyRef:
+                  name: domain-in-a-box-secret
+                  key: domain-password
             - name: HOSTNAME # Set the pod’s hostname.
               value: "domain-server"
             - name: DHCP_POOL # Define the DHCP lease pool; adjust as needed.

@@ -1,5 +1,5 @@
 #!/bin/sh
-set -euo pipefail
+set -eu
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "This script must be run as root." >&2
@@ -50,6 +50,9 @@ if [ ! -f /etc/samba/smb.conf ]; then
     SUBNET=$(ip route show dev eth0 | awk '/ link / {print $1; exit}')
     GATEWAY=$(ip route | awk '/default/ {print $3; exit}')
     TSIG_SECRET=$(tsig-keygen -a hmac-sha256 server-tsig | awk -F'"' '/secret/ {print $2; exit}')
+    SUBNET_BASE=$(echo "${SUBNET}" | cut -d/ -f1)
+    REVERSE_ZONE=$(echo "${SUBNET_BASE}" | awk -F. '{print $3"."$2"."$1".in-addr.arpa"}')
+    PTR_RECORD=$(echo "${IP}" | awk -F. '{print $4}')
 
     # Configure Samba
     echo "Provisioning Samba domain..."
@@ -97,7 +100,26 @@ zone "127.in-addr.arpa" IN {
         file "pri/127.zone";
 };
 
+zone "${REVERSE_ZONE}" IN {
+        type master;
+        file "pri/${REVERSE_ZONE}.zone";
+};
+
 include "/var/lib/samba/bind-dns/named.conf";
+EOF
+
+    mkdir -p /var/bind/pri
+    tee "/var/bind/pri/${REVERSE_ZONE}.zone" >/dev/null <<EOF
+\$TTL 86400
+@   IN SOA ${HOSTNAME}.${DNS_DOMAIN}. admin.${DNS_DOMAIN}. (
+        1
+        3600
+        1800
+        604800
+        86400
+)
+    IN NS ${HOSTNAME}.${DNS_DOMAIN}.
+${PTR_RECORD} IN PTR ${HOSTNAME}.${DNS_DOMAIN}.
 EOF
 
     # Configure Kea DHCP4
@@ -195,8 +217,8 @@ chgrp named /etc/krb5.conf
 
 if [ "$#" -eq 0 ]; then
     echo "Launching supervisord..."
-    /usr/bin/supervisord -c /etc/supervisord.conf
+    exec /usr/bin/supervisord -c /etc/supervisord.conf
 else
-    echo "Executing provided command..."
-    eval "$@"
+    echo "Executing provided command: $*"
+    exec "$@"
 fi

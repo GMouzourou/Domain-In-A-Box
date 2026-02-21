@@ -1,0 +1,105 @@
+services:
+  # Domain Controller
+  domain-controller:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: domain-in-a-box-test
+    privileged: true
+    networks:
+      domain_net:
+        ipv4_address: 192.168.1.1
+    ports:
+      # DNS (using different ports to avoid host conflicts)
+      - "5353:53"
+      - "5353:53/udp"
+      # DHCP
+      - "6767:67/udp"
+      - "6868:68/udp"
+      # Kerberos
+      - "8888:88"
+      - "8888:88/udp"
+      # LDAP
+      - "3389:389"
+      - "3636:636"
+      # RPC
+      - "1135:135"
+      # SMB
+      - "1137:137"
+      - "1138:138"
+      - "1139:139"
+      - "1445:445"
+      - "1464:464"
+      - "13268:3268"
+      - "13269:3269"
+    environment:
+      REALM: "HOME.ARPA"
+      DOMAIN: "HOME"
+      DOMAIN_PASSWORD: "P@ssw0rd"
+      HOSTNAME: "domain-server"
+      DHCP_POOL: "192.168.1.100-192.168.1.200"
+      DNS_FORWARDERS: "1.1.1.1; 8.8.8.8;"
+    volumes:
+      - bind-config:/etc/bind
+      - bind-data:/var/bind
+      - kea-config:/etc/kea
+      - kea-data:/var/lib/kea
+      - samba-config:/etc/samba
+      - samba-data:/var/lib/samba
+      - log-data:/var/log
+    healthcheck:
+      test: ["CMD", "nc", "-z", "192.168.1.1", "389"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on: []
+
+  # Test Suite Runner
+  test-runner:
+    build:
+      context: ..
+      dockerfile: tests/linux-client/Dockerfile
+    container_name: domain-in-a-box-test-runner
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    networks:
+      - domain_net
+    environment:
+      DOMAIN_CONTROLLER_IP: "192.168.1.1"
+      DOMAIN: "HOME"
+      REALM: "HOME.ARPA"
+      DOMAIN_FQDN: "home.arpa"
+      ADMIN_USER: "Administrator"
+      ADMIN_PASSWORD: "P@ssw0rd"
+      HOSTNAME: "domain-server"
+      DNS_DOMAIN: "home.arpa"
+      ENABLE_DHCP_CLIENT: "false"
+      DHCP_POOL: "192.168.1.100-192.168.1.200"
+      SUBNET: "192.168.1.0/24"
+      GATEWAY: "192.168.1.254"
+    depends_on:
+      domain-controller:
+        condition: service_healthy
+    command: ["/usr/local/bin/test-runner","run","all"]
+    tty: true
+    stdin_open: true
+    
+networks:
+  domain_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: "192.168.1.0/24"
+          gateway: "192.168.1.254"
+
+volumes:
+  bind-config:
+  bind-data:
+  kea-config:
+  kea-data:
+  samba-config:
+  samba-data:
+  log-data:
