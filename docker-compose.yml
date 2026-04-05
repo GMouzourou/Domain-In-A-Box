@@ -6,20 +6,20 @@ services:
     networks:
       domain_net:
         # Set the static IP address for the domain controller – ensure it fits your network plan
-        ipv4_address: 192.168.1.1
+        ipv4_address: "${DIB_DOMAIN_CONTROLLER_IP:-192.168.1.1}"
     environment:
       # REALM: Specify your Kerberos/AD realm
-      REALM: "HOME.ARPA"
+      REALM: "${DIB_REALM:-HOME.ARPA}"
       # DOMAIN: Specify your short domain name
-      DOMAIN: "HOME"
-      # Change this to set your initial domain administrator password
-      DOMAIN_PASSWORD: "P@ssw0rd"
+      DOMAIN: "${DIB_DOMAIN:-HOME}"
+      # Set your initial domain administrator password (override in .env or shell)
+      DOMAIN_PASSWORD: "${DIB_DOMAIN_PASSWORD:-ChangeMeNow123!}"
       # HOSTNAME: Set the hostname for your domain controller
-      HOSTNAME: "domain-server"
+      HOSTNAME: "${DIB_HOSTNAME:-domain-server}"
       # DHCP_POOL: Define the DHCP range to lease addresses from; adjust as needed
-      DHCP_POOL: "192.168.1.100-192.168.1.200"
+      DHCP_POOL: "${DIB_DHCP_POOL:-192.168.1.100-192.168.1.200}"
       # DNS_FORWARDERS: Set your upstream DNS servers (separated by semicolons)
-      DNS_FORWARDERS: "1.1.1.1; 8.8.8.8;"
+      DNS_FORWARDERS: "${DIB_DNS_FORWARDERS:-1.1.1.1; 8.8.8.8;}"
     volumes:
       # These volumes persist configuration and data; adjust if you want to bind mount host directories
       - bind-config:/etc/bind
@@ -35,11 +35,11 @@ networks:
     driver: macvlan
     driver_opts:
       # Replace "eth0" with your actual host network interface name
-      parent: eth0
+      parent: ${DIB_PARENT_INTERFACE:-eth0}
     ipam:
       config:
-        - subnet: "192.168.1.0/24" # Adjust to match your local network subnet
-          gateway: "192.168.1.254" # Set this to your network's gateway
+        - subnet: "${DIB_SUBNET:-192.168.1.0/24}" # Adjust to match your local network subnet
+          gateway: "${DIB_GATEWAY:-192.168.1.254}" # Set this to your network's gateway
 
 volumes:
   bind-config:

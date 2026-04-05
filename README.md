@@ -50,6 +50,44 @@ This guide is organized into four parts:
 
 Each section includes guidance on configuration options that are most likely to need customization, ensuring you can tailor the deployment to your specific environment.
 
+### Current Project Status
+
+The repository now includes a Docker-based integration test stack under `tests/` that validates:
+
+- service health (`DNS`, `LDAP`, `Kerberos`, `SMB`, `DHCP`)
+- Active Directory queries over LDAP/LDAPS
+- Linux domain join using `realmd`, `adcli`, and `sssd`
+- DNS forward and reverse resolution
+
+**Latest verified result:**
+
+```bash
+make test-all
+```
+
+This was re-run successfully and finished with:
+
+```text
+Passed: 5/5
+✓ Tests complete
+```
+
+You can also run focused suites from the repository root:
+
+```bash
+make test-health
+make test-dns
+make test-dhcp
+make test-ad
+make test-ad-linux
+```
+
+For test-environment details, see [`tests/README.md`](tests/README.md).
+
+> **Note:** The provided `docker-compose.yml` and `kubernetes.yml` are still environment-specific. Review interface names, static IPs, gateways, and passwords before using the project outside a lab setup.
+>
+> For Docker Compose, copy `.env.example` to `.env` and adjust the `DIB_*` values before starting the stack.
+
 Below is the second part of your README.md guide—detailing how to deploy Domain-In-A-Box in a Kubernetes environment. This section explains the required prerequisites, the purpose of each Kubernetes resource, and step-by-step instructions to get started.
 
 ## 2. Kubernetes
@@ -132,7 +170,7 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
    ```
 
    **What to Customize:**  
-   - **Environment Variables:** Adjust the `REALM`, `DOMAIN`, `DOMAIN_PASSWORD`, and other environment variables to suit your production settings.  
+   - **Environment Variables:** Adjust the `REALM`, `DOMAIN`, and other environment variables to suit your production settings. `DOMAIN_PASSWORD` is now referenced from the `domain-in-a-box-secret` Secret.  
    - **Ports:** Update the container ports if your application uses a different one.  
    - **Persistent Storage:** The PVC templates request 1Gi of storage by default—change the `storage` value if needed.
 
@@ -206,7 +244,8 @@ The `docker-compose.yml` file includes several settings that you might want to a
 
 1. **Prepare the Environment:**
    - Clone or copy the repository containing the `docker-compose.yml` file.
-   - Open the file and review the sections outlined above. Adjust any values (IP addresses, environment variables, volume mounts, etc.) to match your environment.
+   - Copy `.env.example` to `.env`.
+   - Adjust the `DIB_*` values in `.env` to match your environment, especially the password, interface, subnet, gateway, and static IP.
 
 2. **Start the Container:**
    - Run the following command to launch Domain-In-A-Box in detached mode:
@@ -246,12 +285,12 @@ services:
       domain_net:
         ipv4_address: 192.168.1.1  # Change if needed to match your network plan
     environment:
-      REALM: "HOME.ARPA"         # Update to match your AD realm
-      DOMAIN: "HOME"             # Update with your short domain name
-      DOMAIN_PASSWORD: "P@ssw0rd"  # Set your domain administrator password
-      HOSTNAME: "domain-server"   # Set the hostname for your domain controller
-      DHCP_POOL: "192.168.1.100-192.168.1.200"
-      DNS_FORWARDERS: "1.1.1.1; 8.8.8.8;"
+      REALM: "${DIB_REALM:-HOME.ARPA}"
+      DOMAIN: "${DIB_DOMAIN:-HOME}"
+      DOMAIN_PASSWORD: "${DIB_DOMAIN_PASSWORD:-ChangeMeNow123!}"
+      HOSTNAME: "${DIB_HOSTNAME:-domain-server}"
+      DHCP_POOL: "${DIB_DHCP_POOL:-192.168.1.100-192.168.1.200}"
+      DNS_FORWARDERS: "${DIB_DNS_FORWARDERS:-1.1.1.1; 8.8.8.8;}"
     volumes:
       - bind-config:/etc/bind
       - bind-data:/var/bind
@@ -325,7 +364,7 @@ docker run -d \
   --ip 192.168.1.1 \
   -e REALM="HOME.ARPA" \
   -e DOMAIN="HOME" \
-  -e DOMAIN_PASSWORD="P@ssw0rd" \
+  -e DOMAIN_PASSWORD="${DIB_DOMAIN_PASSWORD}" \
   -e HOSTNAME="domain-server" \
   -e DHCP_POOL="192.168.1.100-192.168.1.200" \
   -e DNS_FORWARDERS="1.1.1.1; 8.8.8.8;" \
