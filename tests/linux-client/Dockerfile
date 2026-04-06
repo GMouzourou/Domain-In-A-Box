@@ -1,10 +1,8 @@
 # Linux test client for testing Active Directory integration
 # This client will attempt to join the domain and validate AD functionality
 # Uses dbus-launch for realm operations (no systemd required)
+FROM ubuntu:24.04
 
-FROM ubuntu:22.04
-
-# Prevent interactive prompts during installation
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -18,7 +16,7 @@ RUN apt-get update && \
     passwd \
     sudo \
     vim \
-    netcat \
+    netcat-openbsd \
     dbus \
     packagekit \
     realmd \
@@ -45,8 +43,8 @@ RUN mkdir -p /var/run/dbus && \
     chmod 755 /var/run/dbus
 
 # Set up a basic user for testing
-RUN groupadd -g 1000 testuser && \
-    useradd -u 1000 -g testuser -s /bin/bash -m testuser && \
+RUN groupadd -g 1001 testuser && \
+    useradd -u 1001 -g testuser -s /bin/bash -m testuser && \
     echo "testuser:testpass123" | chpasswd
 
 # Copy and build Go CLI test runner (replaces shell scripts)

@@ -36,23 +36,41 @@ type: Opaque
 stringData:
   domain-password: "CHANGE_ME_BEFORE_APPLYING"
 ---
-# This headless Service is used by the StatefulSet to provide stable DNS for the pod.
+# This headless Service gives the StatefulSet a stable DNS identity inside the
+# cluster. LAN clients should use the Multus/macvlan IP rather than this Service.
 apiVersion: v1
 kind: Service
 metadata:
   name: domain-controller-svc
-  annotations:
-    # "macvlan-network" should match a NetworkAttachmentDefinition you have created,
-    # and "192.168.1.1" is the desired static IP on your local network.
-    k8s.v1.cni.cncf.io/networks: '[{ "name": "macvlan-network", "ips": ["192.168.1.1"] }]'
 spec:
   clusterIP: None # Headless service for StatefulSet.
   selector:
     app: domain-controller
   ports:
-    - name: http
-      port: 9000 # Change if your application uses different ports.
-      targetPort: 9000
+    - name: dns-tcp
+      port: 53
+      targetPort: 53
+      protocol: TCP
+    - name: dns-udp
+      port: 53
+      targetPort: 53
+      protocol: UDP
+    - name: kerberos-tcp
+      port: 88
+      targetPort: 88
+      protocol: TCP
+    - name: kerberos-udp
+      port: 88
+      targetPort: 88
+      protocol: UDP
+    - name: ldap
+      port: 389
+      targetPort: 389
+      protocol: TCP
+    - name: smb
+      port: 445
+      targetPort: 445
+      protocol: TCP
 ---
 # The StatefulSet defines a single replica of your domain controller with persistent volumes.
 apiVersion: apps/v1
@@ -74,29 +92,73 @@ spec:
         # Update network name and desired IP as needed.
         k8s.v1.cni.cncf.io/networks: '[{ "name": "macvlan-network", "ips": ["192.168.1.1"] }]'
     spec:
+      hostname: domain-server # Set the pod’s hostname.
+      subdomain: domain-controller-svc
       containers:
         - name: domain-controller
           image: gmouzourou/domain-in-a-box:latest
           securityContext:
             privileged: true
           env:
-            - name: REALM # Update with your Kerberos/AD realm.
+            - name: DIB_REALM # Update with your Kerberos/AD realm.
               value: "HOME.ARPA"
-            - name: DOMAIN # Update with your short domain name.
+            - name: DIB_DOMAIN # Update with your short domain name.
               value: "HOME"
-            - name: DOMAIN_PASSWORD # Set your initial domain administrator password via Secret.
+            - name: DIB_DOMAIN_PASSWORD # Set your initial domain administrator password via Secret.
               valueFrom:
                 secretKeyRef:
                   name: domain-in-a-box-secret
                   key: domain-password
-            - name: HOSTNAME # Set the pod’s hostname.
-              value: "domain-server"
-            - name: DHCP_POOL # Define the DHCP lease pool; adjust as needed.
+            - name: DIB_INTERFACE # Interface the container should bind Samba/BIND/Kea to.
+              value: "net1" # Multus/macvlan secondary interface is usually `net1`.
+            - name: DIB_DHCP_POOL # Define the DHCP lease pool; adjust as needed.
               value: "192.168.1.100-192.168.1.200"
-            - name: DNS_FORWARDERS # Upstream DNS servers; adjust as needed.
+            - name: DIB_DNS_FORWARDERS # Upstream DNS servers; adjust as needed.
               value: "1.1.1.1; 8.8.8.8;"
           ports:
-            - containerPort: 9000 # Change to the port your app exposes.
+            - name: dns-tcp
+              containerPort: 53
+              protocol: TCP
+            - name: dns-udp
+              containerPort: 53
+              protocol: UDP
+            - name: dhcp
+              containerPort: 67
+              protocol: UDP
+            - name: kerberos-tcp
+              containerPort: 88
+              protocol: TCP
+            - name: kerberos-udp
+              containerPort: 88
+              protocol: UDP
+            - name: ldap
+              containerPort: 389
+              protocol: TCP
+            - name: ldaps
+              containerPort: 636
+              protocol: TCP
+            - name: smb
+              containerPort: 445
+              protocol: TCP
+          # Optional starting point for a small lab cluster. Adjust or remove to
+          # match your node capacity and expected client load.
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          startupProbe:
+            tcpSocket:
+              port: 389
+            periodSeconds: 10
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: 389
+            periodSeconds: 10
+            failureThreshold: 6
           volumeMounts:
             - name: bind-config # Mount for BIND configuration files.
               mountPath: /etc/bind
@@ -117,6 +179,7 @@ spec:
         name: bind-config # PVC for bind-config; adjust storage size if needed.
       spec:
         accessModes: ["ReadWriteOnce"]
+        # storageClassName: your-rwo-storageclass
         resources:
           requests:
             storage: 1Gi

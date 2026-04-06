@@ -22,7 +22,7 @@ type testConfig struct {
 	DNSDomain          string
 	AdminUser          string
 	AdminPassword      string
-	Hostname           string
+	ServerHostname     string
 	Verbose            bool
 }
 
@@ -43,7 +43,7 @@ func getTestConfig(cmd *cobra.Command) testConfig {
 		DNSDomain:          cmd.Flag("dns-domain").Value.String(),
 		AdminUser:          cmd.Flag("admin-user").Value.String(),
 		AdminPassword:      cmd.Flag("admin-password").Value.String(),
-		Hostname:           cmd.Flag("hostname").Value.String(),
+		ServerHostname:     cmd.Flag("server-hostname").Value.String(),
 		Verbose:            verbose,
 	}
 }
