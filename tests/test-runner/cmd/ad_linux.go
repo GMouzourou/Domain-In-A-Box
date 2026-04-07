@@ -52,7 +52,7 @@ func runADLinux(cmd *cobra.Command, args []string) error {
 	}{
 		{"Resolve domain controller via DNS", func() error {
 			dnsClient := network.NewDNSClient(cfg.DomainControllerIP)
-			_, err := dnsClient.LookupA(fmt.Sprintf("%s.%s", cfg.Hostname, cfg.DNSDomain))
+			_, err := dnsClient.LookupA(fmt.Sprintf("%s.%s", cfg.ServerHostname, cfg.DNSDomain))
 			return err
 		}},
 		{"Connect to LDAP service", func() error {

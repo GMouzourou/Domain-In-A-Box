@@ -35,11 +35,11 @@ func Execute() error {
 // InitFlags initializes global flags
 func InitFlags() {
 	rootCmd.PersistentFlags().StringP("domain-controller", "d", envOrDefault(defaultDomainControllerIP, "DOMAIN_CONTROLLER_IP", "TESTRUNNER_DOMAIN_CONTROLLER"), "Domain controller IP address")
-	rootCmd.PersistentFlags().StringP("realm", "r", envOrDefault(defaultRealm, "REALM", "TESTRUNNER_REALM"), "Kerberos realm")
+	rootCmd.PersistentFlags().StringP("realm", "r", envOrDefault(defaultRealm, "DIB_REALM", "TESTRUNNER_REALM"), "Kerberos realm")
 	rootCmd.PersistentFlags().String("dns-domain", envOrDefault(defaultDNSDomain, "DNS_DOMAIN", "TESTRUNNER_DNS_DOMAIN"), "DNS domain name")
 	rootCmd.PersistentFlags().String("admin-user", envOrDefault(defaultAdminUser, "ADMIN_USER", "TESTRUNNER_ADMIN_USER"), "AD admin username")
 	rootCmd.PersistentFlags().String("admin-password", envOrDefault(defaultAdminPassword, "ADMIN_PASSWORD", "TESTRUNNER_ADMIN_PASSWORD"), "AD admin password")
-	rootCmd.PersistentFlags().String("hostname", envOrDefault(defaultHostname, "HOSTNAME", "TESTRUNNER_HOSTNAME"), "Hostname")
+	rootCmd.PersistentFlags().String("server-hostname", envOrDefault(defaultHostname, "SERVER_HOSTNAME", "TESTRUNNER_SERVER_HOSTNAME"), "Server hostname")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose output")
 
 	viper.BindPFlag("domain-controller", rootCmd.PersistentFlags().Lookup("domain-controller"))
@@ -47,7 +47,7 @@ func InitFlags() {
 	viper.BindPFlag("dns-domain", rootCmd.PersistentFlags().Lookup("dns-domain"))
 	viper.BindPFlag("admin-user", rootCmd.PersistentFlags().Lookup("admin-user"))
 	viper.BindPFlag("admin-password", rootCmd.PersistentFlags().Lookup("admin-password"))
-	viper.BindPFlag("hostname", rootCmd.PersistentFlags().Lookup("hostname"))
+	viper.BindPFlag("server-hostname", rootCmd.PersistentFlags().Lookup("server-hostname"))
 	viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
 
 	viper.SetEnvPrefix("TESTRUNNER")

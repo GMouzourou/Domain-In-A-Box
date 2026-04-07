@@ -110,17 +110,25 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
 1. **NetworkAttachmentDefinition:**  
    This custom resource (CRD) is used by Multus to instruct the pod to obtain an additional interface with a static IP. Our sample configuration creates a macvlan interface that brings your pod into the same physical network as your clients.  
    - **Key elements:**  
-     - `master`: Defines the host interface (e.g., `eth0`) that will be used.  
+     - `master`: Defines the host interface (for example, `eth0`) on each node.  
      - `ipam`: Configured in static mode with the assigned IP, subnet mask, and gateway.
 
 2. **Headless Service:**  
-   The headless Service provides stable DNS names for the StatefulSet. Because it does not allocate a cluster IP, it ensures that clients can resolve the pod’s hostname directly.
+   The headless Service provides stable DNS names for the StatefulSet inside the cluster. LAN clients should still use the Multus/macvlan IP rather than the Kubernetes Service IP.
 
 3. **StatefulSet:**  
    A StatefulSet is used because Domain-In-A-Box is a stateful application. It ensures:
    - **Unique, Stable Identity:** The pod keeps a consistent hostname and DNS entry.
    - **Persistent Storage:** Volume claim templates are defined for each of the persistent directories (for BIND, Kea, Samba, and logs).
    - **Static IP Assignment:** The pod annotations request the static IP via Multus by referencing the NetworkAttachmentDefinition.
+
+### Cluster Assumptions and Caveats
+
+- **Single replica only:** Active Directory, BIND, and DHCP are configured here as a single stateful node. Do not scale the `StatefulSet` above `1` without designing replication explicitly.
+- **Layer-2 networking matters:** If you want LAN clients to use the pod for DHCP and normal AD/DNS traffic, Multus/macvlan (or an equivalent L2 attachment) is required. A normal ClusterIP Service is not enough for DHCP.
+- **Interface naming:** The example sets `DIB_INTERFACE=net1`, which is the common Multus secondary interface name. If your CNI names it differently, update that value.
+- **Privileged workload:** The container is intentionally privileged because Samba AD DC, BIND, and Kea need low-level networking access.
+- **Persistent storage:** The sample assumes a `ReadWriteOnce` storage class. Add `storageClassName` if your cluster does not provide a suitable default.
 
 ### Step-by-Step Instructions
 
@@ -161,7 +169,7 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
 
 2. **Deploy the Headless Service and StatefulSet:**
 
-   The provided YAML defines a headless Service and a StatefulSet. The Service (named `domain-controller-svc`) uses annotations to reference the `macvlan-network` and assign your static IP. The StatefulSet deploys a single replica of Domain-In-A-Box with persistent volumes via PVC templates.
+   The provided YAML defines a headless Service and a StatefulSet. The Service (`domain-controller-svc`) is used for stable in-cluster DNS identity, while the `StatefulSet` requests the Multus/macvlan IP directly via pod annotations. The `StatefulSet` deploys a single replica of Domain-In-A-Box with persistent volumes via PVC templates.
 
    To deploy Domain-In-A-Box, run:
 
@@ -170,9 +178,10 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
    ```
 
    **What to Customize:**  
-   - **Environment Variables:** Adjust the `REALM`, `DOMAIN`, and other environment variables to suit your production settings. `DOMAIN_PASSWORD` is now referenced from the `domain-in-a-box-secret` Secret.  
-   - **Ports:** Update the container ports if your application uses a different one.  
-   - **Persistent Storage:** The PVC templates request 1Gi of storage by default—change the `storage` value if needed.
+   - **Environment Variables:** Adjust the `DIB_REALM`, `DIB_DOMAIN`, `DIB_INTERFACE`, and other environment variables to suit your environment. `DIB_DOMAIN_PASSWORD` is referenced from the `domain-in-a-box-secret` Secret.  
+   - **Multus/macvlan settings:** Update `master`, the static IP, and the gateway to match your LAN.  
+   - **Persistent Storage:** The PVC templates request 1Gi of storage by default—change the `storage` value and set `storageClassName` if needed.  
+   - **Resources:** For a small lab cluster, a reasonable starting point is `500m` CPU / `1Gi` memory requested and up to `2` CPU / `4Gi` memory limited.
 
 3. **Verifying the Deployment:**
 
@@ -213,16 +222,16 @@ Deploying Domain-In-A-Box using Docker Compose is a quick and efficient way to g
 The `docker-compose.yml` file includes several settings that you might want to adjust:
 
 - **Static IP:**  
-  Under the `services.domain-controller.networks.domain_net.ipv4_address` section, the static IP is set to `192.168.1.1`.  
+  Under the `services.domain-controller.networks.domain_net.ipv4_address` section, the static IP is set to `192.168.1.1`.
   *Change this value if your network plan requires a different IP for the domain controller.*
 
 - **Environment Variables:**  
-  - **REALM:** Specify your Active Directory Kerberos realm (e.g., `"HOME.ARPA"`).
-  - **DOMAIN:** Define your short domain name (e.g., `"HOME"`).
-  - **DOMAIN_PASSWORD:** Set the initial domain administrator password.
-  - **HOSTNAME:** Designate the hostname for your domain controller (e.g., `"domain-server"`).
-  - **DHCP_POOL:** Specify the range of IP addresses to be leased (e.g., `"192.168.1.100-192.168.1.200"`).
-  - **DNS_FORWARDERS:** List upstream DNS servers (separated by semicolons).
+  - **DIB_REALM:** Specify your Active Directory Kerberos realm (e.g., `"HOME.ARPA"`).
+  - **DIB_DOMAIN:** Define your short domain name (e.g., `"HOME"`).
+  - **DIB_DOMAIN_PASSWORD:** Set the initial domain administrator password.
+  - **DIB_INTERFACE:** Specify the interface to be used by your domain controller (e.g., `"eth0"`).
+  - **DIB_DHCP_POOL:** Specify the range of IP addresses to be leased (e.g., `"192.168.1.100-192.168.1.200"`).
+  - **DIB_DNS_FORWARDERS:** List upstream DNS servers (separated by semicolons).
 
 - **Persistent Volumes:**  
   The following named volumes are used to persist configuration and data:
@@ -285,12 +294,11 @@ services:
       domain_net:
         ipv4_address: 192.168.1.1  # Change if needed to match your network plan
     environment:
-      REALM: "${DIB_REALM:-HOME.ARPA}"
-      DOMAIN: "${DIB_DOMAIN:-HOME}"
-      DOMAIN_PASSWORD: "${DIB_DOMAIN_PASSWORD:-ChangeMeNow123!}"
-      HOSTNAME: "${DIB_HOSTNAME:-domain-server}"
-      DHCP_POOL: "${DIB_DHCP_POOL:-192.168.1.100-192.168.1.200}"
-      DNS_FORWARDERS: "${DIB_DNS_FORWARDERS:-1.1.1.1; 8.8.8.8;}"
+      DIB_REALM: "${DIB_REALM:-HOME.ARPA}"
+      DIB_DOMAIN: "${DIB_DOMAIN:-HOME}"
+      DIB_DOMAIN_PASSWORD: "${DIB_DOMAIN_PASSWORD:-ChangeMeNow123!}"
+      DIB_DHCP_POOL: "${DIB_DHCP_POOL:-192.168.1.100-192.168.1.200}"
+      DIB_DNS_FORWARDERS: "${DIB_DNS_FORWARDERS:-1.1.1.1; 8.8.8.8;}"
     volumes:
       - bind-config:/etc/bind
       - bind-data:/var/bind
@@ -361,13 +369,14 @@ docker run -d \
   --name domain-in-a-box \
   --privileged \
   --network domain_net \
+  --hostname domain-server\
   --ip 192.168.1.1 \
-  -e REALM="HOME.ARPA" \
-  -e DOMAIN="HOME" \
-  -e DOMAIN_PASSWORD="${DIB_DOMAIN_PASSWORD}" \
-  -e HOSTNAME="domain-server" \
-  -e DHCP_POOL="192.168.1.100-192.168.1.200" \
-  -e DNS_FORWARDERS="1.1.1.1; 8.8.8.8;" \
+  -e DIB_REALM="HOME.ARPA" \
+  -e DIB_DOMAIN="HOME" \
+  -e DIB_DOMAIN_PASSWORD="${DIB_DOMAIN_PASSWORD}" \
+  -e DIB_INTERFACE="eth0" \
+  -e DIB_DHCP_POOL="192.168.1.100-192.168.1.200" \
+  -e DIB_DNS_FORWARDERS="1.1.1.1; 8.8.8.8;" \
   -v bind-config:/etc/bind \
   -v bind-data:/var/bind \
   -v kea-config:/etc/kea \

@@ -28,8 +28,8 @@ func runDNS(cmd *cobra.Command, args []string) error {
 		name string
 		fn   func() error
 	}{
-		{fmt.Sprintf("Resolve domain controller hostname (%s.%s)", cfg.Hostname, cfg.DNSDomain), func() error {
-			_, err := dnsClient.LookupA(fmt.Sprintf("%s.%s", cfg.Hostname, cfg.DNSDomain))
+		{fmt.Sprintf("Resolve domain controller hostname (%s.%s)", cfg.ServerHostname, cfg.DNSDomain), func() error {
+			_, err := dnsClient.LookupA(fmt.Sprintf("%s.%s", cfg.ServerHostname, cfg.DNSDomain))
 			return err
 		}},
 		{fmt.Sprintf("Resolve Kerberos SRV record (_kerberos._tcp.%s)", cfg.DNSDomain), func() error {
@@ -45,11 +45,11 @@ func runDNS(cmd *cobra.Command, args []string) error {
 			return err
 		}},
 		{"Query A record for domain controller", func() error {
-			_, err := dnsClient.LookupA(fmt.Sprintf("%s.%s", cfg.Hostname, cfg.DNSDomain))
+			_, err := dnsClient.LookupA(fmt.Sprintf("%s.%s", cfg.ServerHostname, cfg.DNSDomain))
 			return err
 		}},
 		{"Query reverse PTR record", func() error {
-			resolvedIP, err := dnsClient.LookupA(fmt.Sprintf("%s.%s", cfg.Hostname, cfg.DNSDomain))
+			resolvedIP, err := dnsClient.LookupA(fmt.Sprintf("%s.%s", cfg.ServerHostname, cfg.DNSDomain))
 			if err != nil {
 				return err
 			}

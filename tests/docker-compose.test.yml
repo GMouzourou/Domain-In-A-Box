@@ -4,7 +4,8 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    container_name: domain-in-a-box-test
+    hostname: domain-server
+    container_name: domain-in-a-box-test-server
     privileged: true
     networks:
       domain_net:
@@ -33,12 +34,12 @@ services:
       - "13268:3268"
       - "13269:3269"
     environment:
-      REALM: "HOME.ARPA"
-      DOMAIN: "HOME"
-      DOMAIN_PASSWORD: "P@ssw0rd"
-      HOSTNAME: "domain-server"
-      DHCP_POOL: "192.168.1.100-192.168.1.200"
-      DNS_FORWARDERS: "1.1.1.1; 8.8.8.8;"
+      DIB_REALM: "HOME.ARPA"
+      DIB_DOMAIN: "HOME"
+      DIB_DOMAIN_PASSWORD: "P@ssw0rd"
+      DIB_INTERFACE: "eth0"
+      DIB_DHCP_POOL: "192.168.1.100-192.168.1.200"
+      DIB_DNS_FORWARDERS: "1.1.1.1; 8.8.8.8;"
     volumes:
       - bind-config:/etc/bind
       - bind-data:/var/bind
@@ -60,7 +61,8 @@ services:
     build:
       context: ..
       dockerfile: tests/linux-client/Dockerfile
-    container_name: domain-in-a-box-test-runner
+    hostname: domain-client
+    container_name: domain-in-a-box-test-client
     privileged: true
     cap_add:
       - NET_ADMIN
@@ -69,15 +71,15 @@ services:
       - domain_net
     environment:
       DOMAIN_CONTROLLER_IP: "192.168.1.1"
-      DOMAIN: "HOME"
-      REALM: "HOME.ARPA"
+      DIB_DOMAIN: "HOME"
+      DIB_REALM: "HOME.ARPA"
       DOMAIN_FQDN: "home.arpa"
       ADMIN_USER: "Administrator"
       ADMIN_PASSWORD: "P@ssw0rd"
-      HOSTNAME: "domain-server"
+      SERVER_HOSTNAME: "domain-server"
       DNS_DOMAIN: "home.arpa"
       ENABLE_DHCP_CLIENT: "false"
-      DHCP_POOL: "192.168.1.100-192.168.1.200"
+      DIB_DHCP_POOL: "192.168.1.100-192.168.1.200"
       SUBNET: "192.168.1.0/24"
       GATEWAY: "192.168.1.254"
     depends_on:
@@ -89,7 +91,9 @@ services:
     
 networks:
   domain_net:
-    driver: bridge
+    driver: macvlan
+    driver_opts:
+      parent: "eth0"
     ipam:
       config:
         - subnet: "192.168.1.0/24"

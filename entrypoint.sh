@@ -7,17 +7,13 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # Process variables
-: "${REALM:?Environment variable REALM is not set}"
-: "${HOSTNAME:?Environment variable HOSTNAME is not set}"
+: "${DIB_REALM:?Environment variable DIB_REALM is not set}"
+: "${DIB_INTERFACE:?Environment variable DIB_INTERFACE is not set}"
 
-REALM=$(echo "${REALM}" | tr '[:lower:]' '[:upper:]')
-DNS_DOMAIN=$(echo "${REALM}" | tr '[:upper:]' '[:lower:]')
-HOSTNAME=$(echo "${HOSTNAME}" | tr '[:upper:]' '[:lower:]')
-IP=$(ip addr show dev eth0 | awk '/inet / { split($2, a, "/"); print a[1]; exit }')
-
-# Configure Hostname
-echo "Setting hostname to ${HOSTNAME}"
-hostname set-hostname "${HOSTNAME}"
+DIB_REALM=$(echo "${DIB_REALM}" | tr '[:lower:]' '[:upper:]')
+DNS_DOMAIN=$(echo "${DIB_REALM}" | tr '[:upper:]' '[:lower:]')
+HOSTNAME=$(hostname | tr '[:upper:]' '[:lower:]')
+IP=$(ip addr show dev "${DIB_INTERFACE}" | awk '/inet / { split($2, a, "/"); print a[1]; exit }')
 
 # Configure resolv.conf
 echo "Writing /etc/resolv.conf..."
@@ -41,13 +37,13 @@ if [ ! -f /etc/samba/smb.conf ]; then
     echo "Running first time setup..."
 
     # Process variables
-    : "${DOMAIN:?Environment variable DOMAIN is not set}"
-    : "${DOMAIN_PASSWORD:?Environment variable DOMAIN_PASSWORD is not set}"
-    : "${DHCP_POOL:?Environment variable DHCP_POOL is not set}"
-    : "${DNS_FORWARDERS:?Environment variable DNS_FORWARDERS is not set}"
+    : "${DIB_DOMAIN:?Environment variable DIB_DOMAIN is not set}"
+    : "${DIB_DOMAIN_PASSWORD:?Environment variable DIB_DOMAIN_PASSWORD is not set}"
+    : "${DIB_DHCP_POOL:?Environment variable DIB_DHCP_POOL is not set}"
+    : "${DIB_DNS_FORWARDERS:?Environment variable DIB_DNS_FORWARDERS is not set}"
 
-    DOMAIN=$(echo "${DOMAIN}" | tr '[:lower:]' '[:upper:]')
-    SUBNET=$(ip route show dev eth0 | awk '/ link / {print $1; exit}')
+    DIB_DOMAIN=$(echo "${DIB_DOMAIN}" | tr '[:lower:]' '[:upper:]')
+    SUBNET=$(ip route show dev "${DIB_INTERFACE}" | awk '/ link / {print $1; exit}')
     GATEWAY=$(ip route | awk '/default/ {print $3; exit}')
     TSIG_SECRET=$(tsig-keygen -a hmac-sha256 server-tsig | awk -F'"' '/secret/ {print $2; exit}')
     SUBNET_BASE=$(echo "${SUBNET}" | cut -d/ -f1)
@@ -56,9 +52,13 @@ if [ ! -f /etc/samba/smb.conf ]; then
 
     # Configure Samba
     echo "Provisioning Samba domain..."
-    samba-tool domain provision --use-rfc2307 --realm="${REALM}" --domain="${DOMAIN}" --server-role=dc --dns-backend=BIND9_DLZ --adminpass="${DOMAIN_PASSWORD}" --host-name="${HOSTNAME}" --host-ip="${IP}" --option "bind interfaces only = yes" --option "interfaces = lo eth0" --option "log file = /var/log/samba/%m.log" --option "max log size = 10000"
+    samba-tool domain provision --use-rfc2307 --realm="${DIB_REALM}" --domain="${DIB_DOMAIN}" --server-role=dc --dns-backend=BIND9_DLZ --adminpass="${DIB_DOMAIN_PASSWORD}" --host-name="${HOSTNAME}" --host-ip="${IP}" --option "bind interfaces only = yes" --option "interfaces = lo ${DIB_INTERFACE}" --option "log file = /var/log/samba/%m.log" --option "max log size = 10000"
 
     # Configure BIND9
+    echo "Configure /var/bind..."
+    chmod 775 /var/bind
+    chown -R root:bind /var/bind
+
     echo "Writing /etc/bind/named.conf..."
     tee /etc/bind/named.conf >/dev/null <<EOF
 key "server-tsig" {
@@ -80,36 +80,36 @@ options {
         allow-update { key "server-tsig"; };
         allow-recursion { 127.0.0.1; ${SUBNET}; };
         allow-transfer { none; };
-        forwarders { ${DNS_FORWARDERS} };
+        forwarders { ${DIB_DNS_FORWARDERS} };
         listen-on port 53 { ${IP}; 127.0.0.1; };
         listen-on-v6 { none; };
 };
 
 zone "." IN {
         type hint;
-        file "named.ca";
+        file "/usr/share/dns/root.hints";
 };
 
 zone "localhost" IN {
         type master;
-        file "pri/localhost.zone";
+        file "/etc/bind/db.local";
 };
 
 zone "127.in-addr.arpa" IN {
         type master;
-        file "pri/127.zone";
+        file "/etc/bind/db.127";
 };
 
 zone "${REVERSE_ZONE}" IN {
         type master;
-        file "pri/${REVERSE_ZONE}.zone";
+        file "/etc/bind/${REVERSE_ZONE}.zone";
 };
 
 include "/var/lib/samba/bind-dns/named.conf";
 EOF
 
-    mkdir -p /var/bind/pri
-    tee "/var/bind/pri/${REVERSE_ZONE}.zone" >/dev/null <<EOF
+    echo "Writing /etc/bind/${REVERSE_ZONE}.zone..."
+    tee "/etc/bind/${REVERSE_ZONE}.zone" >/dev/null <<EOF
 \$TTL 86400
 @   IN SOA ${HOSTNAME}.${DNS_DOMAIN}. admin.${DNS_DOMAIN}. (
         1
@@ -123,13 +123,17 @@ ${PTR_RECORD} IN PTR ${HOSTNAME}.${DNS_DOMAIN}.
 EOF
 
     # Configure Kea DHCP4
+    echo "Configure /var/lib/kea..."
+    chmod 775 /var/lib/kea
+    chown -R root:_kea /var/lib/kea
+
     echo "Writing /etc/kea/kea-dhcp4.conf..."
     tee /etc/kea/kea-dhcp4.conf >/dev/null <<EOF
 {
     "Dhcp4": {
         "interfaces-config": {
             "interfaces": [
-                "eth0"
+                "${DIB_INTERFACE}"
             ]
         },
         "lease-database": {
@@ -159,7 +163,7 @@ EOF
                 "subnet": "${SUBNET}",
                 "pools": [
                     {
-                        "pool": "${DHCP_POOL}"
+                        "pool": "${DIB_DHCP_POOL}"
                     }
                 ]
             }
@@ -213,7 +217,7 @@ fi
 # Configure Kerberos
 echo "Copying Kerberos configuration..."
 cp /var/lib/samba/private/krb5.conf /etc/krb5.conf
-chgrp named /etc/krb5.conf
+chgrp bind /etc/krb5.conf 2>/dev/null || true
 
 if [ "$#" -eq 0 ]; then
     echo "Launching supervisord..."
