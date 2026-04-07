@@ -9,6 +9,7 @@ RUN apt-get update && \
         bind9 \
         bind9-dnsutils \
         bind9-utils \
+        chrony \
         dnsutils \
         ed \
         hostname \
@@ -28,11 +29,12 @@ COPY supervisord.conf /etc/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
 
 RUN chmod 755 /entrypoint.sh && \
-    mkdir -p /run/kea && \
-    chmod 775 /run/kea && \
+    mkdir -p /run/kea /run/named && \
+    chmod 775 /run/kea /run/named && \
     chown -R root:_kea /run/kea && \
+    chown -R root:bind /run/named && \
     rm /etc/samba/smb.conf
 
-EXPOSE 53 53/udp 67/udp 68/udp 88 135 137 138 139 389 445 464 636 3268 3269
+EXPOSE 53 53/udp 67/udp 68/udp 88 88/udp 123/udp 135 137/udp 138/udp 139 389 389/udp 445 464 464/udp 636 3268 3269 49152-49252/tcp
 
 ENTRYPOINT ["/entrypoint.sh"]

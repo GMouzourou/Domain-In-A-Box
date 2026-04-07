@@ -65,14 +65,14 @@ docker-compose -f tests/docker-compose.test.yml up -d --build
 ### Check logs
 
 ```bash
-docker logs domain-in-a-box-test
-docker logs domain-in-a-box-test-runner
+docker logs domain-in-a-box-test-server
+docker logs domain-in-a-box-test-client
 ```
 
 ### Open a shell in the client container
 
 ```bash
-docker exec -it domain-in-a-box-test-runner bash
+docker exec -it domain-in-a-box-test-client bash
 ```
 
 ### Useful manual checks inside the client
@@ -90,11 +90,11 @@ kinit Administrator@HOME.ARPA
 
 Latest verified behavior:
 
-- `health`, `dhcp`, and `ad` are passing
-- `ad-linux` is implemented and domain join works in the test client flow
-- `dns` is mostly passing, but the reverse PTR assertion still needs follow-up
+- `make test-all` currently completes successfully with `Passed: 5/5`
+- the Linux client image is Ubuntu-based and validates `realm`, `adcli`, and `sssd` domain-join behavior
+- the test client preserves Docker-managed networking by default (`ENABLE_DHCP_CLIENT=false`) and only attempts a DHCP lease when explicitly enabled for experiments
 
-Because the test runner now returns a non-zero exit code on suite failures, `make test-all` correctly fails while unresolved DNS issues remain.
+Because the Go test runner returns a non-zero exit code on suite failures, `make test-all` still correctly fails if any regression is introduced.
 
 ---
 

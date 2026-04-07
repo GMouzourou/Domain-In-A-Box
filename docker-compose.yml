@@ -13,18 +13,22 @@ services:
       DIB_REALM: "${DIB_REALM:-HOME.ARPA}"
       # DIB_DOMAIN: Specify your short domain name
       DIB_DOMAIN: "${DIB_DOMAIN:-HOME}"
-      # Set your initial domain administrator password (override in .env or shell)
-      DIB_DOMAIN_PASSWORD: "${DIB_DOMAIN_PASSWORD:-ChangeMeNow123!}"
+      # Set the domain administrator password used during provisioning
+      DIB_DOMAIN_ADMIN_PASSWORD: "${DIB_DOMAIN_ADMIN_PASSWORD:-ChangeMeNow123!}"
+      # Opt in if you want the env value to override manual AD password changes on restart
+      DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART: "${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
       # DIB_INTERFACE: Set the network interface to be used by the domain controller
       DIB_INTERFACE: "${DIB_INTERFACE:-eth0}"
-      # DIB_DHCP_POOL: Define the DHCP range to lease addresses from; adjust as needed
+      # DIB_DHCP_POOL: Define the DHCP range to lease addresses from; updates are applied on restart
       DIB_DHCP_POOL: "${DIB_DHCP_POOL:-192.168.1.100-192.168.1.200}"
-      # DIB_DNS_FORWARDERS: Set your upstream DNS servers (separated by semicolons)
+      # DIB_DNS_FORWARDERS: Set your upstream DNS servers; updates are applied on restart
       DIB_DNS_FORWARDERS: "${DIB_DNS_FORWARDERS:-1.1.1.1; 8.8.8.8;}"
     volumes:
       # These volumes persist configuration and data; adjust if you want to bind mount host directories
       - bind-config:/etc/bind
-      - bind-data:/var/bind
+      - bind-data:/var/cache/bind
+      - chrony-config:/etc/chrony
+      - chrony-data:/var/lib/chrony
       - kea-config:/etc/kea
       - kea-data:/var/lib/kea
       - samba-config:/etc/samba
@@ -44,6 +48,8 @@ networks:
 volumes:
   bind-config:
   bind-data:
+  chrony-config:
+  chrony-data:
   kea-config:
   kea-data:
   samba-config:

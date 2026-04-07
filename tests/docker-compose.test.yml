@@ -36,13 +36,13 @@ services:
     environment:
       DIB_REALM: "HOME.ARPA"
       DIB_DOMAIN: "HOME"
-      DIB_DOMAIN_PASSWORD: "P@ssw0rd"
+      DIB_DOMAIN_ADMIN_PASSWORD: "P@ssw0rd"
       DIB_INTERFACE: "eth0"
       DIB_DHCP_POOL: "192.168.1.100-192.168.1.200"
       DIB_DNS_FORWARDERS: "1.1.1.1; 8.8.8.8;"
     volumes:
       - bind-config:/etc/bind
-      - bind-data:/var/bind
+      - bind-data:/var/cache/bind
       - kea-config:/etc/kea
       - kea-data:/var/lib/kea
       - samba-config:/etc/samba
