@@ -16,7 +16,6 @@ RUN apt-get update && \
     passwd \
     sudo \
     vim \
-    netcat-openbsd \
     dbus \
     packagekit \
     realmd \
@@ -50,7 +49,7 @@ RUN groupadd -g 1001 testuser && \
 # Copy and build Go CLI test runner (replaces shell scripts)
 COPY tests/test-runner /tests/test-runner
 WORKDIR /tests/test-runner
-RUN go mod tidy && go build -o /usr/local/bin/test-runner && chmod +x /usr/local/bin/test-runner
+RUN go mod download && go build -o /usr/local/bin/test-runner && chmod +x /usr/local/bin/test-runner
 
 # Copy entrypoint script that starts dbus-daemon and DHCP client
 WORKDIR /

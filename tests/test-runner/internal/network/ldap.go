@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -38,7 +40,7 @@ func NewLDAPClient(server string) *LDAPClient {
 	return client
 }
 
-// WithCredentials sets username and password and enables TLS
+// WithCredentials sets username and password and enables TLS-backed LDAP access.
 func (lc *LDAPClient) WithCredentials(username, password string) *LDAPClient {
 	lc.Username = username
 	lc.Password = password
@@ -49,6 +51,11 @@ func (lc *LDAPClient) WithCredentials(username, password string) *LDAPClient {
 		lc.Port = "636" // Standard LDAPS port
 	}
 	return lc
+}
+
+// WithTLSCredentials is an explicit alias for secure LDAP binds.
+func (lc *LDAPClient) WithTLSCredentials(username, password string) *LDAPClient {
+	return lc.WithCredentials(username, password)
 }
 
 // Connect establishes a connection to LDAP server
@@ -100,6 +107,10 @@ func (lc *LDAPClient) Bind(conn *ldap.Conn) error {
 
 // SearchBase performs a search at the base DN
 func (lc *LDAPClient) SearchBase(baseDN, filter string) ([]*ldap.Entry, error) {
+	if lc.UseTLS && lc.Username != "" && lc.Password != "" {
+		return lc.searchWithLDAPTool(baseDN, filter)
+	}
+
 	conn, err := lc.Connect()
 	if err != nil {
 		return nil, fmt.Errorf("LDAP connection failed: %w", err)
@@ -135,6 +146,10 @@ func (lc *LDAPClient) SearchBase(baseDN, filter string) ([]*ldap.Entry, error) {
 
 // SearchSubtree performs a subtree search
 func (lc *LDAPClient) SearchSubtree(baseDN, filter string, attrs ...string) ([]*ldap.Entry, error) {
+	if lc.UseTLS && lc.Username != "" && lc.Password != "" {
+		return lc.searchWithLDAPTool(baseDN, filter, attrs...)
+	}
+
 	conn, err := lc.Connect()
 	if err != nil {
 		return nil, err
@@ -170,4 +185,35 @@ func (lc *LDAPClient) SearchSubtree(baseDN, filter string, attrs ...string) ([]*
 	}
 
 	return sr.Entries, nil
+}
+
+func (lc *LDAPClient) searchWithLDAPTool(baseDN, filter string, attrs ...string) ([]*ldap.Entry, error) {
+	args := []string{
+		"-LLL",
+		"-H", fmt.Sprintf("ldaps://%s:%s", lc.Server, lc.Port),
+		"-x",
+		"-D", lc.Username,
+		"-w", lc.Password,
+		"-b", baseDN,
+		filter,
+	}
+	args = append(args, attrs...)
+
+	cmd := exec.Command("ldapsearch", args...)
+	cmd.Env = append(os.Environ(), "LDAPTLS_REQCERT=never")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("ldapsearch failed for user '%s': %w\n%s", lc.Username, err, strings.TrimSpace(string(output)))
+	}
+
+	entries := make([]*ldap.Entry, 0)
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "dn: ") {
+			dn := strings.TrimSpace(strings.TrimPrefix(line, "dn: "))
+			entries = append(entries, ldap.NewEntry(dn, map[string][]string{}))
+		}
+	}
+
+	return entries, nil
 }

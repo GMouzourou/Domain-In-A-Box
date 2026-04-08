@@ -76,7 +76,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: Lint shell scripts
-        run: shellcheck -x entrypoint.sh tests/linux-client/entrypoint.sh
+        run: shellcheck -x entrypoint.sh entrypoint.d/*.sh tests/linux-client/entrypoint.sh
 
       - name: Lint Dockerfiles
         run: |
@@ -102,9 +102,10 @@ jobs:
           go-version-file: tests/test-runner/go.mod
           cache-dependency-path: tests/test-runner/go.sum
 
-      - name: Build and vet
+      - name: Test, vet, and build
         run: |
           cd tests/test-runner
+          go test ./...
           go vet ./...
           go build ./...
 

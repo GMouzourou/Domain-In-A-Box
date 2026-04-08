@@ -111,7 +111,7 @@ func runAllTests() error {
 // runCmd is the "run" command that allows running specific or all tests
 var runCmd = &cobra.Command{
 	Use:   "run [suite]",
-	Short: "Run one or more test suites",
+	Short: "Run one test suite or all suites",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {

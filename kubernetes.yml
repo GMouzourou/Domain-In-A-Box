@@ -273,67 +273,65 @@ spec:
               mountPath: /var/log
   volumeClaimTemplates:
     - metadata:
-        name: bind-config # PVC for bind-config; adjust storage size if needed.
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        # storageClassName: your-rwo-storageclass
-        resources:
-          requests:
-            storage: 1Gi
-    - metadata:
-        name: bind-data # PVC for bind-data.
+        name: bind-config
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 1Gi
+            storage: 32Mi
     - metadata:
-        name: chrony-config # PVC for chrony-config; adjust storage size if needed.
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        # storageClassName: your-rwo-storageclass
-        resources:
-          requests:
-            storage: 1Gi
-    - metadata:
-        name: chrony-data # PVC for chrony-data.
+        name: bind-data
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 1Gi
+            storage: 512Mi
     - metadata:
-        name: kea-config # PVC for kea-config.
+        name: chrony-config
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 1Gi
+            storage: 32Mi
     - metadata:
-        name: kea-data # PVC for kea-data.
+        name: chrony-data
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 1Gi
+            storage: 64Mi
     - metadata:
-        name: samba-config # PVC for samba-config.
+        name: kea-config
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 1Gi
+            storage: 32Mi
     - metadata:
-        name: samba-data # PVC for samba-data.
+        name: kea-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 512Mi
+    - metadata:
+        name: samba-config
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 32Mi
+    - metadata:
+        name: samba-data
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
             storage: 1Gi
     - metadata:
-        name: log-data # PVC for log-data.
+        name: log-data
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 1Gi
+            storage: 2Gi

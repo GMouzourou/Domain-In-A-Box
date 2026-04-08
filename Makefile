@@ -1,4 +1,4 @@
-.PHONY: help build test test-dns test-dhcp test-ad test-ad-linux test-all test-verbose test-clean lint shellcheck hadolint docker-lint push push-docker push-ghcr dev-up dev-down dev-logs clean
+.PHONY: help build test test-unit test-dns test-dhcp test-ad test-ad-linux test-all test-verbose test-clean lint shellcheck hadolint docker-lint push push-docker push-ghcr dev-up dev-down dev-logs clean
 
 # Default target
 help:
@@ -10,6 +10,7 @@ help:
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test-all              Run all tests with docker-compose"
+	@echo "  make test-unit             Run Go unit tests for the test runner"
 	@echo "  make test-verbose          Run tests with verbose output"
 	@echo "  make test-health           Run health check tests"
 	@echo "  make test-dns              Run DNS resolution tests"
@@ -75,6 +76,11 @@ test-clean:
 	$(COMPOSE) -f tests/docker-compose.test.yml down -v
 	@echo "✓ Test environment cleaned"
 
+test-unit:
+	@echo "Running Go unit tests..."
+	cd tests/test-runner && go test ./...
+	@echo "✓ Unit tests complete"
+
 test-verbose: VERBOSE=true
 test-verbose:
 	@echo "Running tests with verbose output..."
@@ -108,7 +114,7 @@ lint: shellcheck hadolint docker-lint
 shellcheck:
 	@echo "Linting shell scripts..."
 	@if command -v shellcheck &> /dev/null; then \
-		shellcheck -x entrypoint.sh || true; \
+		shellcheck -x entrypoint.sh entrypoint.d/*.sh tests/linux-client/entrypoint.sh; \
 		echo "✓ Shell scripts checked"; \
 	else \
 		echo "⚠ shellcheck not available"; \

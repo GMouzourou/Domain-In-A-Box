@@ -49,7 +49,7 @@ services:
       - samba-data:/var/lib/samba
       - log-data:/var/log
     healthcheck:
-      test: ["CMD", "nc", "-z", "192.168.1.1", "389"]
+      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 389), 5); s.close()"]
       interval: 10s
       timeout: 5s
       retries: 3

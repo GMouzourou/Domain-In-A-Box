@@ -23,6 +23,11 @@ type testConfig struct {
 	AdminUser          string
 	AdminPassword      string
 	ServerHostname     string
+	DHCPPool           string
+	Gateway            string
+	DHCPTestInterface  string
+	DHCPLeaseFile      string
+	DHCPLeaseSuccess   bool
 	Verbose            bool
 }
 
@@ -36,7 +41,10 @@ func envOrDefault(fallback string, keys ...string) string {
 }
 
 func getTestConfig(cmd *cobra.Command) testConfig {
-	verbose, _ := cmd.Flags().GetBool("verbose")
+	verbose := false
+	if flag := cmd.Flag("verbose"); flag != nil {
+		verbose = strings.EqualFold(flag.Value.String(), "true")
+	}
 	return testConfig{
 		DomainControllerIP: cmd.Flag("domain-controller").Value.String(),
 		Realm:              cmd.Flag("realm").Value.String(),
@@ -44,6 +52,11 @@ func getTestConfig(cmd *cobra.Command) testConfig {
 		AdminUser:          cmd.Flag("admin-user").Value.String(),
 		AdminPassword:      cmd.Flag("admin-password").Value.String(),
 		ServerHostname:     cmd.Flag("server-hostname").Value.String(),
+		DHCPPool:           envOrDefault("", "DIB_DHCP_POOL", "TESTRUNNER_DHCP_POOL"),
+		Gateway:            envOrDefault("", "GATEWAY", "TESTRUNNER_GATEWAY"),
+		DHCPTestInterface:  envOrDefault("", "DIB_DHCP_TEST_INTERFACE", "TESTRUNNER_DHCP_INTERFACE"),
+		DHCPLeaseFile:      envOrDefault("/var/lib/dhcp/dhclient.leases", "DIB_DHCP_LEASE_FILE", "TESTRUNNER_DHCP_LEASE_FILE"),
+		DHCPLeaseSuccess:   strings.EqualFold(envOrDefault("false", "DIB_DHCP_LEASE_SUCCESS", "TESTRUNNER_DHCP_LEASE_SUCCESS"), "true"),
 		Verbose:            verbose,
 	}
 }
