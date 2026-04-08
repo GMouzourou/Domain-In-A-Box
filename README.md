@@ -182,9 +182,9 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
    ```
 
    **What to Customize:**  
-   - **Environment Variables:** Adjust the `DIB_REALM`, `DIB_DOMAIN`, `DIB_INTERFACE`, and other environment variables to suit your environment. `DIB_DOMAIN_ADMIN_PASSWORD` is referenced from the `domain-in-a-box-secret` Secret, and `DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART` should normally remain `false`.  
-   - **Multus/macvlan settings:** Update `master`, the static IP, and the gateway to match your LAN.  
-   - **Persistent Storage:** The PVC templates request 1Gi of storage by default—change the `storage` value and set `storageClassName` if needed.  
+   - **Environment Variables:** Adjust the `DIB_REALM`, `DIB_DOMAIN`, `DIB_INTERFACE`, and other environment variables to suit your environment. `DIB_DOMAIN_ADMIN_PASSWORD` is referenced from the `domain-in-a-box-secret` Secret, and `DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART` should normally remain `false`.
+   - **Multus/macvlan settings:** Update `master`, the static IP, and the gateway to match your LAN.
+   - **Persistent Storage:** The sample starter values are `32Mi`-scale config PVCs, `1Gi` for `samba-data`, and `2Gi` for logs. Increase the `storage` values and set `storageClassName` as needed for your environment.
    - **Resources:** For a small lab cluster, a reasonable starting point is `500m` CPU / `1Gi` memory requested and up to `2` CPU / `4Gi` memory limited.
 
 3. **Verifying the Deployment:**

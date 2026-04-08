@@ -24,10 +24,17 @@ SERVICE_INTERFACE=${SERVICE_INTERFACE%%@*}
 DIB_INTERFACE="${DIB_INTERFACE:-auto}"
 if [[ -z "$DIB_INTERFACE" || "$DIB_INTERFACE" == "auto" ]]; then
   DIB_INTERFACE=$(ip -o link show | awk -F': ' -v service="$SERVICE_INTERFACE" '$2 !~ /^lo/ { iface=$2; sub(/@.*/, "", iface); if (iface != service) { print iface; exit } }')
+  if [[ -z "$DIB_INTERFACE" ]]; then
+    DIB_INTERFACE="$SERVICE_INTERFACE"
+  fi
 fi
 
-# Keep the default service path intact. When DHCP testing is explicitly enabled,
-# use a non-service interface if one is available; otherwise skip the lease test.
+export DIB_DHCP_TEST_INTERFACE="${DIB_INTERFACE:-}"
+export DIB_DHCP_LEASE_FILE="/var/lib/dhcp/dhclient.leases"
+export DIB_DHCP_LEASE_SUCCESS="false"
+
+# Keep the default service path intact. Prefer a non-service interface for DHCP
+# validation when one is available; otherwise renew on the service path itself.
 echo "Service interface: ${SERVICE_INTERFACE:-unknown}"
 echo "DHCP test interface: ${DIB_INTERFACE:-unavailable}"
 
@@ -35,21 +42,26 @@ if [[ "${ENABLE_DHCP_CLIENT:-false}" == "true" ]]; then
   if [[ -n "$DIB_INTERFACE" ]] && ip link show "$DIB_INTERFACE" > /dev/null 2>&1; then
     echo "Preparing DHCP test interface $DIB_INTERFACE..."
     ORIGINAL_DEFAULT_ROUTE=$(ip route show default | head -n1 || true)
-    ip addr flush dev "$DIB_INTERFACE" scope global || true
+    if [[ "$DIB_INTERFACE" != "$SERVICE_INTERFACE" ]]; then
+      ip addr flush dev "$DIB_INTERFACE" scope global || true
+    fi
     ip link set "$DIB_INTERFACE" up || true
 
     echo "Attempting DHCP lease on $DIB_INTERFACE..."
-    if timeout 30 dhclient -1 -v "$DIB_INTERFACE"; then
+    if timeout 45 dhclient -4 -v -lf "$DIB_DHCP_LEASE_FILE" "$DIB_INTERFACE"; then
+      export DIB_DHCP_LEASE_SUCCESS="true"
       DHCP_IP=$(ip -4 addr show "$DIB_INTERFACE" | awk '/inet / {print $2}' | head -n1 | cut -d'/' -f1)
       if [[ -n "$DHCP_IP" ]]; then
         echo "DHCP lease acquired on $DIB_INTERFACE: $DHCP_IP"
       fi
-      ip route del default dev "$DIB_INTERFACE" 2>/dev/null || true
-      if [[ -n "$ORIGINAL_DEFAULT_ROUTE" ]]; then
-        ip route replace "$ORIGINAL_DEFAULT_ROUTE" || true
+      if [[ "$DIB_INTERFACE" != "$SERVICE_INTERFACE" ]]; then
+        ip route del default dev "$DIB_INTERFACE" 2>/dev/null || true
+        if [[ -n "$ORIGINAL_DEFAULT_ROUTE" ]]; then
+          ip route replace "$ORIGINAL_DEFAULT_ROUTE" || true
+        fi
       fi
     else
-      echo "DHCP lease attempt on $DIB_INTERFACE did not complete; continuing with Docker-assigned networking"
+      echo "DHCP lease attempt on $DIB_INTERFACE did not complete; continuing with current networking"
     fi
   else
     echo "DHCP interface $DIB_INTERFACE is not present; skipping DHCP lease attempt"
@@ -101,7 +113,7 @@ wait_for_tcp_port() {
   local label="$3"
 
   for _ in $(seq 1 30); do
-    if nc -z -w 1 "$host" "$port" > /dev/null 2>&1; then
+    if timeout 1 bash -c "</dev/tcp/${host}/${port}" > /dev/null 2>&1; then
       echo "$label reachable on $host:$port"
       return 0
     fi
@@ -118,6 +130,7 @@ ip addr show
 
 echo "Waiting for domain controller reachability..."
 wait_for_tcp_port "$DOMAIN_CONTROLLER_IP" 389 "LDAP" || true
+wait_for_tcp_port "$DOMAIN_CONTROLLER_IP" 636 "LDAPS" || true
 wait_for_tcp_port "$DOMAIN_CONTROLLER_IP" 445 "SMB" || true
 wait_for_tcp_port "$DOMAIN_CONTROLLER_IP" 88 "Kerberos" || true
 wait_for_tcp_port "$DOMAIN_CONTROLLER_IP" 53 "DNS" || true

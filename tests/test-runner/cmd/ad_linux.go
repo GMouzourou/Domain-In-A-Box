@@ -44,37 +44,32 @@ func runADLinux(cmd *cobra.Command, args []string) error {
 	// Do not pre-write sssd.conf here. `realm join` manages SSSD configuration,
 	// and pre-creating the domain stanza causes the join to fail.
 
-	var passed, total int
-
-	tests := []struct {
-		name string
-		fn   func() error
-	}{
-		{"Resolve domain controller via DNS", func() error {
+	checks := []helpers.Check{
+		{Name: "Resolve domain controller via DNS", Run: func() error {
 			dnsClient := network.NewDNSClient(cfg.DomainControllerIP)
 			_, err := dnsClient.LookupA(fmt.Sprintf("%s.%s", cfg.ServerHostname, cfg.DNSDomain))
 			return err
 		}},
-		{"Connect to LDAP service", func() error {
+		{Name: "Connect to LDAP service", Run: func() error {
 			ldapClient := network.NewLDAPClient(cfg.DomainControllerIP)
 			return ldapClient.CheckConnectivity()
 		}},
-		{"Connect to Kerberos service", func() error {
+		{Name: "Connect to Kerberos service", Run: func() error {
 			return checkKerberosPort(cfg.DomainControllerIP)
 		}},
-		{"Query domain object via LDAP", func() error {
+		{Name: "Query domain object via LDAP", Run: func() error {
 			ldapClient := network.NewLDAPClient(cfg.DomainControllerIP).WithCredentials(
 				fmt.Sprintf("%s@%s", cfg.AdminUser, cfg.DNSDomain), cfg.AdminPassword)
 			_, err := ldapClient.SearchBase(ldapDN, "(objectClass=domain)")
 			return err
 		}},
-		{"Query domain controller information", func() error {
+		{Name: "Query domain controller information", Run: func() error {
 			ldapClient := network.NewLDAPClient(cfg.DomainControllerIP).WithCredentials(
 				fmt.Sprintf("%s@%s", cfg.AdminUser, cfg.DNSDomain), cfg.AdminPassword)
 			_, err := ldapClient.SearchBase(ldapDN, "(objectClass=domain)")
 			return err
 		}},
-		{"Query domain users", func() error {
+		{Name: "Query domain users", Run: func() error {
 			ldapClient := network.NewLDAPClient(cfg.DomainControllerIP).WithCredentials(
 				fmt.Sprintf("%s@%s", cfg.AdminUser, cfg.DNSDomain), cfg.AdminPassword)
 			searchBase := fmt.Sprintf("cn=Users,%s", ldapDN)
@@ -87,27 +82,15 @@ func runADLinux(cmd *cobra.Command, args []string) error {
 			}
 			return nil
 		}},
-		{"Join Active Directory domain or verify join status", func() error {
+		{Name: "Join Active Directory domain or verify join status", Run: func() error {
 			return checkDomainJoin(cfg.Realm, cfg.DNSDomain, cfg.DomainControllerIP, cfg.AdminUser, cfg.AdminPassword)
 		}},
-		{"SSSD domain user lookup", func() error {
+		{Name: "SSSD domain user lookup", Run: func() error {
 			return lookupUser(cfg.AdminUser, cfg.DNSDomain)
 		}},
 	}
 
-	for _, test := range tests {
-		total++
-		helpers.LogTest(test.name)
-		if err := test.fn(); err == nil {
-			helpers.LogPass(test.name)
-			passed++
-		} else {
-			helpers.LogFail(test.name)
-		}
-	}
-
-	fmt.Printf("\nLinux AD Join Test Results: %d/%d tests passed\n", passed, total)
-
+	passed, total := helpers.RunChecks("Linux AD Join Test Results", checks, cfg.Verbose)
 	if passed < total {
 		return TestFailureError{Suite: "ad-linux", Message: fmt.Sprintf("%d/%d passed", passed, total)}
 	}

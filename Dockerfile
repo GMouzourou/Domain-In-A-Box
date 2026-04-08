@@ -7,28 +7,25 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         bind9 \
-        bind9-dnsutils \
         bind9-utils \
         chrony \
-        dnsutils \
         ed \
-        hostname \
         iproute2 \
         kea-dhcp-ddns-server \
         kea-dhcp4-server \
-        netcat-openbsd \
         samba \
         samba-ad-dc \
         samba-ad-provision \
-        samba-common-bin \
         supervisor && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 COPY supervisord.conf /etc/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
+COPY entrypoint.d/ /entrypoint.d/
 
 RUN chmod 755 /entrypoint.sh && \
+    chmod -R 755 /entrypoint.d && \
     mkdir -p /run/kea /run/named && \
     chmod 775 /run/kea /run/named && \
     chown -R root:_kea /run/kea && \

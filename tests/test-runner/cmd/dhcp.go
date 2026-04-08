@@ -11,43 +11,26 @@ import (
 
 var dhcpCmd = &cobra.Command{
 	Use:   "dhcp",
-	Short: "Run DHCP functionality tests",
+	Short: "Run DHCP reachability and DDNS readiness checks",
 	RunE:  runDHCP,
 }
 
 func runDHCP(cmd *cobra.Command, args []string) error {
 	cfg := getTestConfig(cmd)
 
-	helpers.LogInfo("Starting DHCP Functionality Tests...")
+	helpers.LogInfo("Starting DHCP reachability checks...")
 	helpers.LogInfo(fmt.Sprintf("DHCP Server: %s", cfg.DomainControllerIP))
 
-	var passed, total int
-
-	tests := []struct {
-		name string
-		fn   func() error
-	}{
-		{"DHCP server listening on port 67", func() error {
+	checks := []helpers.Check{
+		{Name: "DHCP server reachable on UDP port 67", Run: func() error {
 			return network.CheckUDPPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "67", "6767"), 5*time.Second)
 		}},
-		{"DNS accessible (DDNS capability)", func() error {
+		{Name: "DNS service reachable for DDNS integration", Run: func() error {
 			return network.CheckPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "53", "5353"), 5*time.Second)
 		}},
 	}
 
-	for _, test := range tests {
-		total++
-		helpers.LogTest(test.name)
-		if err := test.fn(); err == nil {
-			helpers.LogPass(test.name)
-			passed++
-		} else {
-			helpers.LogFail(test.name)
-		}
-	}
-
-	fmt.Printf("\nDHCP Test Results: %d/%d passed\n", passed, total)
-
+	passed, total := helpers.RunChecks("DHCP Test Results", checks, cfg.Verbose)
 	if passed < total {
 		return TestFailureError{Suite: "dhcp", Message: fmt.Sprintf("%d/%d passed", passed, total)}
 	}
