@@ -2,7 +2,7 @@
 
 ## 1. Introduction
 
-**Domain-In-A-Box** is a containerized solution that consolidates essential network services into a single, easy-to-deploy package. It provides an **Active Directory Domain Controller**, a **DNS server**, and a **DHCPv4 server with Dynamic DNS (DDNS)**. This makes it ideal for simplifying network management in home networks, lab environments, small to medium enterprises, and edge deployments.
+**Domain-In-A-Box** is a containerized solution that consolidates essential network services into a single, easy-to-deploy package. It provides an **Active Directory Domain Controller**, a **DNS server**, a **DHCPv4 server with Dynamic DNS (DDNS)**, and an **NTP service via Chrony** for domain time synchronization. This makes it ideal for simplifying network management in home networks, lab environments, small to medium enterprises, and edge deployments.
 
 ### Key Features
 
@@ -14,6 +14,9 @@
   
 - **DHCPv4 Server with DDNS:**  
   Employs Kea DHCP with dynamic DNS updates, ensuring clients receive IP addresses from a specified pool while automatically updating DNS records.
+  
+- **Time Synchronization (NTP):**  
+  Uses Chrony to provide a domain time source so Kerberos-based clients can keep their clocks aligned with the domain controller.
   
 - **Containerized Deployment:**  
   Available as a Docker image on Docker Hub, Domain-In-A-Box can be deployed using Docker CLI, Docker Compose, or orchestrated in a Kubernetes environment.
@@ -129,6 +132,7 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
 - **Interface naming:** The example sets `DIB_INTERFACE=net1`, which is the common Multus secondary interface name. If your CNI names it differently, update that value.
 - **Privileged workload:** The container is intentionally privileged because Samba AD DC, BIND, and Kea need low-level networking access.
 - **Persistent storage:** The sample assumes a `ReadWriteOnce` storage class. Add `storageClassName` if your cluster does not provide a suitable default.
+- **Firewalling and service reachability:** When clients use the Multus/macvlan IP directly, allow the AD/DC ports on your network path: `53/tcp+udp`, `67/udp`, `68/udp`, `88/tcp+udp`, `123/udp`, `135/tcp`, `137/udp`, `138/udp`, `139/tcp`, `389/tcp+udp`, `445/tcp`, `464/tcp+udp`, `636/tcp`, `3268/tcp`, `3269/tcp`, and the fixed Samba RPC range `49152-49252/tcp`.
 
 ### Step-by-Step Instructions
 
@@ -178,7 +182,7 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
    ```
 
    **What to Customize:**  
-   - **Environment Variables:** Adjust the `DIB_REALM`, `DIB_DOMAIN`, `DIB_INTERFACE`, and other environment variables to suit your environment. `DIB_DOMAIN_PASSWORD` is referenced from the `domain-in-a-box-secret` Secret.  
+   - **Environment Variables:** Adjust the `DIB_REALM`, `DIB_DOMAIN`, `DIB_INTERFACE`, and other environment variables to suit your environment. `DIB_DOMAIN_ADMIN_PASSWORD` is referenced from the `domain-in-a-box-secret` Secret, and `DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART` should normally remain `false`.  
    - **Multus/macvlan settings:** Update `master`, the static IP, and the gateway to match your LAN.  
    - **Persistent Storage:** The PVC templates request 1Gi of storage by default—change the `storage` value and set `storageClassName` if needed.  
    - **Resources:** For a small lab cluster, a reasonable starting point is `500m` CPU / `1Gi` memory requested and up to `2` CPU / `4Gi` memory limited.
@@ -228,15 +232,18 @@ The `docker-compose.yml` file includes several settings that you might want to a
 - **Environment Variables:**  
   - **DIB_REALM:** Specify your Active Directory Kerberos realm (e.g., `"HOME.ARPA"`).
   - **DIB_DOMAIN:** Define your short domain name (e.g., `"HOME"`).
-  - **DIB_DOMAIN_PASSWORD:** Set the initial domain administrator password.
+  - **DIB_DOMAIN_ADMIN_PASSWORD:** Set the domain administrator password used during provisioning.
+  - **DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:** Set to `true` only if you want container restarts to re-sync the Administrator password from the environment.
   - **DIB_INTERFACE:** Specify the interface to be used by your domain controller (e.g., `"eth0"`).
-  - **DIB_DHCP_POOL:** Specify the range of IP addresses to be leased (e.g., `"192.168.1.100-192.168.1.200"`).
-  - **DIB_DNS_FORWARDERS:** List upstream DNS servers (separated by semicolons).
+  - **DIB_DHCP_POOL:** Specify the range of IP addresses to be leased (e.g., `"192.168.1.100-192.168.1.200"`); updates are applied on restart.
+  - **DIB_DNS_FORWARDERS:** List upstream DNS servers (separated by semicolons); updates are applied on restart.
 
 - **Persistent Volumes:**  
   The following named volumes are used to persist configuration and data:
   - `bind-config` → `/etc/bind`
-  - `bind-data` → `/var/bind`
+  - `bind-data` → `/var/cache/bind`
+  - `chrony-config` → `/etc/chrony`
+  - `chrony-data` → `/var/lib/chrony`
   - `kea-config` → `/etc/kea`
   - `kea-data` → `/var/lib/kea`
   - `samba-config` → `/etc/samba`
@@ -248,6 +255,9 @@ The `docker-compose.yml` file includes several settings that you might want to a
   In the `networks.domain_net` section:
   - **parent:** The host interface for macvlan (default is `eth0`).
   - **subnet & gateway:** These are set according to your local network. Adjust the `subnet` (e.g., `"192.168.1.0/24"`) and `gateway` (e.g., `"192.168.1.254"`) as needed.
+
+- **Ports and Firewalling:**  
+  Because the container appears directly on the LAN through macvlan, the Compose example does not publish host ports with a `ports:` block. Ensure that your LAN/firewall policy allows the required AD/DC traffic, including `123/udp` for NTP and the fixed Samba RPC range `49152-49252/tcp`.
 
 ### Step-by-Step Deployment
 
@@ -281,6 +291,8 @@ The `docker-compose.yml` file includes several settings that you might want to a
      ```bash
      docker-compose restart
      ```
+   - Changes to `DIB_DHCP_POOL` and `DIB_DNS_FORWARDERS` are re-applied on restart without reprovisioning the domain.
+   - To also re-sync the Administrator password from the environment on restart, set `DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART=true`.
 
 ### Example `docker-compose.yml` (Excerpt)
 
@@ -288,6 +300,7 @@ The `docker-compose.yml` file includes several settings that you might want to a
 services:
   domain-controller:
     image: gmouzourou/domain-in-a-box:latest
+    hostname: domain-server
     container_name: domain-in-a-box
     privileged: true
     networks:
@@ -296,12 +309,16 @@ services:
     environment:
       DIB_REALM: "${DIB_REALM:-HOME.ARPA}"
       DIB_DOMAIN: "${DIB_DOMAIN:-HOME}"
-      DIB_DOMAIN_PASSWORD: "${DIB_DOMAIN_PASSWORD:-ChangeMeNow123!}"
+      DIB_DOMAIN_ADMIN_PASSWORD: "${DIB_DOMAIN_ADMIN_PASSWORD:-ChangeMeNow123!}"
+      DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART: "${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
+      DIB_INTERFACE: "${DIB_INTERFACE:-eth0}"
       DIB_DHCP_POOL: "${DIB_DHCP_POOL:-192.168.1.100-192.168.1.200}"
       DIB_DNS_FORWARDERS: "${DIB_DNS_FORWARDERS:-1.1.1.1; 8.8.8.8;}"
     volumes:
       - bind-config:/etc/bind
-      - bind-data:/var/bind
+      - bind-data:/var/cache/bind
+      - chrony-config:/etc/chrony
+      - chrony-data:/var/lib/chrony
       - kea-config:/etc/kea
       - kea-data:/var/lib/kea
       - samba-config:/etc/samba
@@ -321,6 +338,8 @@ networks:
 volumes:
   bind-config:
   bind-data:
+  chrony-config:
+  chrony-data:
   kea-config:
   kea-data:
   samba-config:
@@ -369,16 +388,19 @@ docker run -d \
   --name domain-in-a-box \
   --privileged \
   --network domain_net \
-  --hostname domain-server\
+  --hostname domain-server \
   --ip 192.168.1.1 \
   -e DIB_REALM="HOME.ARPA" \
   -e DIB_DOMAIN="HOME" \
-  -e DIB_DOMAIN_PASSWORD="${DIB_DOMAIN_PASSWORD}" \
+  -e DIB_DOMAIN_ADMIN_PASSWORD="${DIB_DOMAIN_ADMIN_PASSWORD}" \
+  -e DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART="false" \
   -e DIB_INTERFACE="eth0" \
   -e DIB_DHCP_POOL="192.168.1.100-192.168.1.200" \
   -e DIB_DNS_FORWARDERS="1.1.1.1; 8.8.8.8;" \
   -v bind-config:/etc/bind \
-  -v bind-data:/var/bind \
+  -v bind-data:/var/cache/bind \
+  -v chrony-config:/etc/chrony \
+  -v chrony-data:/var/lib/chrony \
   -v kea-config:/etc/kea \
   -v kea-data:/var/lib/kea \
   -v samba-config:/etc/samba \
@@ -441,4 +463,4 @@ docker run -d \
   Running the container in privileged mode and assigning a static IP on your host network may introduce security risks. Ensure that your host is secure and that only trusted users have access.
 
 - **Environment-Specific Adjustments:**  
-  Customize environment variables and network settings to match your production environment. These provide flexibility to adjust for different network topologies or security requirements.
+  Customize environment variables and network settings to match your production environment. In particular, ensure that your LAN and any upstream firewall permit the standard AD/DC ports plus `123/udp` for Chrony and the fixed Samba RPC range `49152-49252/tcp`.

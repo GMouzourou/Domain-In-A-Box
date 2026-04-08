@@ -12,6 +12,7 @@ fi
 
 DIB_REALM=$(echo "${DIB_REALM}" | tr '[:lower:]' '[:upper:]')
 DNS_DOMAIN=$(echo "${DIB_REALM}" | tr '[:upper:]' '[:lower:]')
+DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART="${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
 HOSTNAME=$(hostname | tr '[:upper:]' '[:lower:]')
 IP=$(ip addr show dev "${DIB_INTERFACE}" | awk '/inet / { split($2, a, "/"); print a[1]; exit }')
 
@@ -38,7 +39,7 @@ if [ ! -f /etc/samba/smb.conf ]; then
 
     # Process variables
     : "${DIB_DOMAIN:?Environment variable DIB_DOMAIN is not set}"
-    : "${DIB_DOMAIN_PASSWORD:?Environment variable DIB_DOMAIN_PASSWORD is not set}"
+    : "${DIB_DOMAIN_ADMIN_PASSWORD:?Environment variable DIB_DOMAIN_ADMIN_PASSWORD is not set}"
     : "${DIB_DHCP_POOL:?Environment variable DIB_DHCP_POOL is not set}"
     : "${DIB_DNS_FORWARDERS:?Environment variable DIB_DNS_FORWARDERS is not set}"
 
@@ -52,12 +53,21 @@ if [ ! -f /etc/samba/smb.conf ]; then
 
     # Configure Samba
     echo "Provisioning Samba domain..."
-    samba-tool domain provision --use-rfc2307 --realm="${DIB_REALM}" --domain="${DIB_DOMAIN}" --server-role=dc --dns-backend=BIND9_DLZ --adminpass="${DIB_DOMAIN_PASSWORD}" --host-name="${HOSTNAME}" --host-ip="${IP}" --option "bind interfaces only = yes" --option "interfaces = lo ${DIB_INTERFACE}" --option "log file = /var/log/samba/%m.log" --option "max log size = 10000"
+    samba-tool domain provision --use-rfc2307 --realm="${DIB_REALM}" --domain="${DIB_DOMAIN}" --server-role=dc --dns-backend=BIND9_DLZ --adminpass="${DIB_DOMAIN_ADMIN_PASSWORD}" --host-name="${HOSTNAME}" --host-ip="${IP}" --option "bind interfaces only = yes" --option "interfaces = lo ${DIB_INTERFACE}" --option "log file = /var/log/samba/%m.log" --option "max log size = 10000"
+    
+    echo "Configuring Samba RPC and NTP integration..."
+    sed -i '/^\[global\]/,/^\[/{
+        /^\[global\]/b
+        /^\[/i\
+\trpc server dynamic port range = 49152-49252\
+\tntp signd socket directory = /var/lib/samba/ntp_signd\
+
+    }' /etc/samba/smb.conf
 
     # Configure BIND9
     echo "Configure /var/bind..."
-    chmod 775 /var/bind
-    chown -R root:bind /var/bind
+    chmod 775 /var/cache/bind
+    chown -R root:bind /var/cache/bind
 
     echo "Writing /etc/bind/named.conf..."
     tee /etc/bind/named.conf >/dev/null <<EOF
@@ -67,8 +77,8 @@ key "server-tsig" {
 };
 
 options {
-        directory "/var/bind";
-        pid-file "/var/run/named/named.pid";
+        directory "/var/cache/bind";
+        pid-file "/run/named/named.pid";
         tkey-gssapi-keytab "/var/lib/samba/bind-dns/dns.keytab";
         
         auth-nxdomain yes;
@@ -212,12 +222,42 @@ EOF
     }
 }
 EOF
+
+    # Configure Chrony NTP
+    echo "Writing /etc/chrony/chrony.conf..."
+    tee /etc/chrony/chrony.conf >/dev/null <<EOF
+pool pool.ntp.org iburst
+driftfile /var/lib/chrony/chrony.drift
+makestep 1.0 3
+rtcsync
+local stratum 10
+allow ${SUBNET}
+bindaddress ${IP}
+bindcmdaddress 127.0.0.1
+ntpsigndsocket /var/lib/samba/ntp_signd
+EOF
+else
+    if [ "${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART}" = "true" ]; then
+        if [ -z "${DIB_DOMAIN_ADMIN_PASSWORD}" ]; then
+            echo "Failed to update Administrator password from latest configuration: DIB_DOMAIN_ADMIN_PASSWORD is not set or is empty"
+        else
+            echo "Updating Administrator password from latest configuration..."
+            samba-tool user setpassword Administrator --newpassword="${DIB_DOMAIN_ADMIN_PASSWORD}" >/dev/null  
+        fi
+    fi
+
+    echo "Updating DHCP pool and DNS forwarders from latest configuration..."
+    esc=$(printf '%s' "$DIB_DHCP_POOL" | sed 's/[\/&]/\\&/g')
+    sed -i -E 's/("pool"[[:space:]]*:[[:space:]]*")[^"]*(")/\1'"$esc"'\2/' /etc/kea/kea-dhcp4.conf
+
+    esc=$(printf '%s' "$DIB_DNS_FORWARDERS" | sed 's/[\/&]/\\&/g')
+    sed -i -E "s/(forwarders[[:space:]]*\{)[^}]*\}([[:space:]]*;)/\1 ${esc} \}\2/" /etc/bind/named.conf
 fi
 
 # Configure Kerberos
 echo "Copying Kerberos configuration..."
 cp /var/lib/samba/private/krb5.conf /etc/krb5.conf
-chgrp bind /etc/krb5.conf 2>/dev/null || true
+chown root:bind /etc/krb5.conf
 
 if [ "$#" -eq 0 ]; then
     echo "Launching supervisord..."
