@@ -20,6 +20,11 @@ DNS_DOMAIN=$(echo "${DIB_REALM}" | tr '[:upper:]' '[:lower:]')
 CONTAINER_HOSTNAME=$(hostname | tr '[:upper:]' '[:lower:]')
 IP=$(ip addr show dev "${DIB_INTERFACE}" | awk '/inet / { split($2, a, "/"); print a[1]; exit }')
 
+if [ -z "${IP}" ]; then
+    echo "Failed to determine an IPv4 address for DIB_INTERFACE=${DIB_INTERFACE}. Check that the interface exists and is configured." >&2
+    exit 1
+fi
+
 # Configure resolv.conf
 echo "Writing /etc/resolv.conf..."
 tee /etc/resolv.conf >/dev/null <<EOF
@@ -49,7 +54,13 @@ if [ ! -f /etc/samba/smb.conf ]; then
 
     DIB_DOMAIN=$(echo "${DIB_DOMAIN}" | tr '[:lower:]' '[:upper:]')
     SUBNET=$(ip route show dev "${DIB_INTERFACE}" | awk '/ link / {print $1; exit}')
-    GATEWAY=$(ip route | awk '/default/ {print $3; exit}')
+    GATEWAY=$(ip route show dev "${DIB_INTERFACE}" | awk '/via/ {print $3; exit}')
+
+    if [ -z "${SUBNET}" ] || [ -z "${GATEWAY}" ]; then
+        echo "Failed to determine subnet/gateway for DIB_INTERFACE=${DIB_INTERFACE}. Ensure the selected interface has a connected subnet and a route via your LAN gateway." >&2
+        exit 1
+    fi
+
     TSIG_SECRET=$(tsig-keygen -a hmac-sha256 server-tsig | awk -F'"' '/secret/ {print $2; exit}')
     REVERSE_ZONE=$(echo "${SUBNET}" | cut -d/ -f1 | awk -F. '{print $3"."$2"."$1".in-addr.arpa"}')
     PTR_RECORD=$(echo "${IP}" | awk -F. '{print $4}')

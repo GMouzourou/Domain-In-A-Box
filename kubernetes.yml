@@ -1,6 +1,6 @@
 ---
 # This NetworkAttachmentDefinition uses Multus to create a macvlan interface with a static IP for the domain controller.
-# Remove if you've already catered for this elsewhere in the your cluster.
+# Remove it if your cluster already provides an equivalent attachment definition.
 apiVersion: k8s.cni.cncf.io/v1
 kind: NetworkAttachmentDefinition
 metadata:
@@ -8,7 +8,9 @@ metadata:
 spec:
   # Replace "eth0" with your actual host network interface name.
   # "address" sets the static IP address for the domain controller,
-  # and "gateway" set your network's default gateway/router IP address.
+  # and "gateway" sets your network's default gateway/router IP address.
+  # Add a subnet route as well so LAN-bound traffic stays on the macvlan
+  # interface instead of being sent to the cluster's primary/default network.
   config: |-
     {
       "cniVersion": "0.3.1",
@@ -23,6 +25,9 @@ spec:
             "address": "192.168.1.1/24",
             "gateway": "192.168.1.254"
           }
+        ],
+        "routes": [
+          { "dst": "192.168.1.0/24", "gw": "192.168.1.254" }
         ]
       }
     }
@@ -34,7 +39,7 @@ metadata:
   name: domain-in-a-box-secret
 type: Opaque
 stringData:
-  domain-password: "CHANGE_ME_BEFORE_APPLYING"
+  domain-admin-password: "CHANGE_ME_BEFORE_APPLYING"
 ---
 # This headless Service gives the StatefulSet a stable DNS identity inside the
 # cluster. LAN clients should use the Multus/macvlan IP rather than this Service.
@@ -142,10 +147,14 @@ spec:
       annotations:
         # Annotation to request a static IP via Multus.
         # Update network name and desired IP as needed.
-        k8s.v1.cni.cncf.io/networks: '[{ "name": "macvlan-network", "ips": ["192.168.1.1"] }]'
+        k8s.v1.cni.cncf.io/networks: '[{ "name": "macvlan-network" }]'
     spec:
-      hostname: domain-server # Set the pod’s hostname.
-      subdomain: domain-controller-svc
+      # StatefulSets derive pod hostnames from the StatefulSet name and ordinal
+      # (for example, `domain-controller-0`), so a manual `hostname:` override
+      # here will not behave like it does for a standalone Pod.
+      #
+      # hostname: domain-server
+      # subdomain: domain-controller-svc
       containers:
         - name: domain-controller
           image: gmouzourou/domain-in-a-box:latest
@@ -160,7 +169,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: domain-in-a-box-secret
-                  key: domain-password
+                  key: domain-admin-password
             - name: DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART # Set to true only if you want restart-time password sync from env.
               value: "false"
             - name: DIB_INTERFACE # Interface the container should bind Samba/BIND/Kea to.
@@ -169,8 +178,6 @@ spec:
               value: "192.168.1.100-192.168.1.200"
             - name: DIB_DNS_FORWARDERS # Upstream DNS servers; adjust as needed.
               value: "1.1.1.1; 8.8.8.8;"
-            - name: DIB_RPC_PORT_RANGE # Constrain the Samba RPC range for simpler firewalling.
-              value: "49152-49252"
           ports:
             - name: dns-tcp
               containerPort: 53
@@ -243,91 +250,67 @@ spec:
               cpu: "2"
               memory: "4Gi"
           startupProbe:
-            tcpSocket:
-              port: 389
+            exec:
+              command: ["python3", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 389), 5); s.close()"]
             periodSeconds: 10
             failureThreshold: 30
           readinessProbe:
-            tcpSocket:
-              port: 389
+            exec:
+              command: ["python3", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 389), 5); s.close()"]
             periodSeconds: 10
             failureThreshold: 6
           volumeMounts:
-            - name: bind-config # Mount for BIND configuration files.
+            - name: dib-data
               mountPath: /etc/bind
-            - name: bind-data # Mount for BIND cache/runtime files.
+              subPath: etc-bind
+            - name: dib-data
               mountPath: /var/cache/bind
-            - name: chrony-config # Mount for chrony configuration files.
+              subPath: var-cache-bind
+            - name: dib-data
               mountPath: /etc/chrony
-            - name: chrony-data # Mount for chrony data files.
+              subPath: etc-chrony
+            - name: dib-data
               mountPath: /var/lib/chrony
-            - name: kea-config # Mount for Kea DHCP configuration files.
+              subPath: var-lib-chrony
+            - name: dib-data
               mountPath: /etc/kea
-            - name: kea-data # Mount for Kea DHCP persistent data.
+              subPath: etc-kea
+            - name: dib-data
               mountPath: /var/lib/kea
-            - name: samba-config # Mount for Samba configuration files.
+              subPath: var-lib-kea
+            - name: dib-data
               mountPath: /etc/samba
-            - name: samba-data # Mount for Samba persistent data.
+              subPath: etc-samba
+            - name: dib-data
               mountPath: /var/lib/samba
-            - name: log-data # Mount for log data.
+              subPath: var-lib-samba
+            - name: log-data
               mountPath: /var/log
+      initContainers:
+        - name: init-log-data
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              mkdir -p /var/log/samba/cores
+              chmod 0700 /var/log/samba/cores
+              touch /var/log/kea-dhcp4.log
+              chmod 664 /var/log/kea-dhcp4.log
+              chown root:_kea /var/log/kea-dhcp4.log
+          volumeMounts:
+            - name: log-data
+              mountPath: /var/log
+          securityContext:
+            runAsUser: 0
   volumeClaimTemplates:
     - metadata:
-        name: bind-config
+        name: dib-data
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 32Mi
-    - metadata:
-        name: bind-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 512Mi
-    - metadata:
-        name: chrony-config
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 32Mi
-    - metadata:
-        name: chrony-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 64Mi
-    - metadata:
-        name: kea-config
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 32Mi
-    - metadata:
-        name: kea-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 512Mi
-    - metadata:
-        name: samba-config
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 32Mi
-    - metadata:
-        name: samba-data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 1Gi
+            storage: 2Gi
     - metadata:
         name: log-data
       spec:

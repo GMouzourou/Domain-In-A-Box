@@ -8,6 +8,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         bind9 \
         bind9-utils \
+        bind9-dnsutils \
         chrony \
         ed \
         iproute2 \
@@ -18,16 +19,16 @@ RUN apt-get update && \
         samba-ad-provision \
         supervisor && \
     apt-get clean && \
+    setcap 'cap_net_admin,cap_net_raw=+ep' /usr/sbin/kea-dhcp4 && \
     rm -rf /var/lib/apt/lists/*
 
 COPY supervisord.conf /etc/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
 COPY entrypoint.d/ /entrypoint.d/
 
-RUN chmod 755 /entrypoint.sh && \
-    chmod -R 755 /entrypoint.d && \
-    mkdir -p /run/kea /run/named && \
-    chmod 775 /run/kea /run/named && \
+RUN mkdir -p /run/kea /run/named /var/log/samba/cores && \
+    chmod -R 775 /entrypoint.sh /entrypoint.d /run/kea /run/named && \
+    chmod 700 /var/log/samba/cores && \
     chown -R root:_kea /run/kea && \
     chown -R root:bind /run/named && \
     rm /etc/samba/smb.conf
