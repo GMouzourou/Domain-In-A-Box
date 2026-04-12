@@ -19,6 +19,7 @@ RUN apt-get update && \
         samba-ad-provision \
         supervisor && \
     apt-get clean && \
+    setcap 'cap_net_admin,cap_net_raw=+ep' /usr/sbin/kea-dhcp4 && \
     rm -rf /var/lib/apt/lists/*
 
 COPY supervisord.conf /etc/supervisord.conf
@@ -26,10 +27,13 @@ COPY entrypoint.sh /entrypoint.sh
 COPY entrypoint.d/ /entrypoint.d/
 
 RUN mkdir -p /run/kea /run/named /var/log/samba/cores && \
+    touch /var/log/kea-dhcp4.log && \
     chmod -R 775 /entrypoint.sh /entrypoint.d /run/kea /run/named && \
     chmod 700 /var/log/samba/cores && \
+    chmod 664 /var/log/kea-dhcp4.log && \
     chown -R root:_kea /run/kea && \
     chown -R root:bind /run/named && \
+    chown root:_kea /var/log/kea-dhcp4.log && \
     rm /etc/samba/smb.conf
 
 EXPOSE 53 53/udp 67/udp 68/udp 88 88/udp 123/udp 135 137/udp 138/udp 139 389 389/udp 445 464 464/udp 636 3268 3269 49152-49252/tcp
