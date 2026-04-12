@@ -91,8 +91,6 @@ For test-environment details, see [`tests/README.md`](tests/README.md).
 >
 > For Docker Compose, copy `.env.example` to `.env` and adjust the `DIB_*` values before starting the stack.
 
-Below is the second part of your README.md guide—detailing how to deploy Domain-In-A-Box in a Kubernetes environment. This section explains the required prerequisites, the purpose of each Kubernetes resource, and step-by-step instructions to get started.
-
 ## 2. Kubernetes
 
 This section describes how to deploy Domain-In-A-Box on Kubernetes. In a production-like environment, you'll leverage persistent volumes for storing configuration and data, and use Multus (or another CNI plugin) to assign a static IP address that matches your physical network.
@@ -114,7 +112,7 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
    This custom resource (CRD) is used by Multus to instruct the pod to obtain an additional interface with a static IP. Our sample configuration creates a macvlan interface that brings your pod into the same physical network as your clients.  
    - **Key elements:**  
      - `master`: Defines the host interface (for example, `eth0`) on each node.  
-     - `ipam`: Configured in static mode with the assigned IP, subnet mask, and gateway.
+     - `ipam`: Configured in static mode with the assigned IP, subnet mask, gateway, and—when your CNI does not add it automatically—a route for the attached LAN subnet.
 
 2. **Headless Service:**  
    The headless Service provides stable DNS names for the StatefulSet inside the cluster. LAN clients should still use the Multus/macvlan IP rather than the Kubernetes Service IP.
@@ -160,6 +158,12 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
                "address": "192.168.1.1/24",
                "gateway": "192.168.1.254"
              }
+           ],
+           "routes": [
+             {
+               "dst": "192.168.1.0/24",
+               "gw": "192.168.1.254"
+             }
            ]
          }
        }
@@ -183,7 +187,7 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
 
    **What to Customize:**  
    - **Environment Variables:** Adjust the `DIB_REALM`, `DIB_DOMAIN`, `DIB_INTERFACE`, and other environment variables to suit your environment. `DIB_DOMAIN_ADMIN_PASSWORD` is referenced from the `domain-in-a-box-secret` Secret, and `DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART` should normally remain `false`.
-   - **Multus/macvlan settings:** Update `master`, the static IP, and the gateway to match your LAN.
+   - **Multus/macvlan settings:** Update `master`, the static IP, the gateway, and the `routes` entry to match your LAN. This is especially important when the cluster keeps its default route on a different interface.
    - **Persistent Storage:** The sample starter values are `32Mi`-scale config PVCs, `1Gi` for `samba-data`, and `2Gi` for logs. Increase the `storage` values and set `storageClassName` as needed for your environment.
    - **Resources:** For a small lab cluster, a reasonable starting point is `500m` CPU / `1Gi` memory requested and up to `2` CPU / `4Gi` memory limited.
 
@@ -206,8 +210,6 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
 
 - **Monitoring and Logging:**  
   Ensure you have mechanisms to monitor the StatefulSet and its persistent storage, as the domain controller is critical to your network's operation.
-
-Below is the third part of your README.md guide, which explains how to deploy Domain-In-A-Box using Docker Compose. This section highlights the prerequisites, key configuration options, and step-by-step instructions to help users get started.
 
 ## 3. Docker Compose
 
@@ -346,8 +348,6 @@ volumes:
   samba-data:
   log-data:
 ```
-Below is the fourth section of your README.md guide, which explains how to deploy Domain-In-A-Box using the Docker CLI. This section covers the necessary prerequisites, useful commands, and options for those who prefer a straightforward, command-based deployment.
-
 ## 4. Docker CLI
 
 Deploying Domain-In-A-Box directly via the Docker CLI is ideal for quick testing or lightweight deployments where additional orchestration features (like those provided by Compose or Kubernetes) are not required. This section outlines how to set up the necessary network, run the container with the required options, and manage the deployment.
