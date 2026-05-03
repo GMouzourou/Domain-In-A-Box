@@ -22,18 +22,22 @@ dib_configure_kea() {
         "option-data": [
             {
                 "name": "domain-name-servers",
+                "code": 6,
                 "data": "${IP}"
             },
             {
                 "name": "routers",
+                "code": 3,
                 "data": "${GATEWAY}"
             },
             {
                 "name": "domain-name",
+                "code": 15,
                 "data": "${DNS_DOMAIN}"
             },
             {
                 "name": "domain-search",
+                "code": 119,
                 "data": "${DNS_DOMAIN}"
             }
         ],
@@ -56,7 +60,7 @@ dib_configure_kea() {
                 "name": "kea-dhcp4",
                 "output_options": [
                     {
-                        "output": "/var/log/kea-dhcp4.log"
+                        "output": "/var/log/kea/kea-dhcp4.log"
                     }
                 ],
                 "severity": "INFO"
@@ -82,7 +86,7 @@ EOF
                 "name": "kea-dhcp-ddns",
                 "output_options": [
                     {
-                        "output": "/var/log/kea-dhcp-ddns.log"
+                        "output": "/var/log/kea/kea-dhcp-ddns.log"
                     }
                 ],
                 "severity": "INFO"

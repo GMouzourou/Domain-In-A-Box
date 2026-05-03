@@ -66,7 +66,7 @@ build-test-client:
 	@echo "✓ Build complete: $(REGISTRY)/$(IMAGE_NAME)-test-client:$(VERSION)"
 
 # Test targets
-test-all:
+test-all: test-clean
 	@echo "Starting integration tests..."
 	$(COMPOSE) -f tests/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test-runner
 	@echo "✓ Tests complete"
@@ -138,7 +138,7 @@ docker-lint:
 # Development targets
 dev-up:
 	@echo "Starting development environment..."
-	$(COMPOSE) -f docker-compose.yml up -d
+	$(COMPOSE) -f docker-compose.yml up --build -d
 	@echo "✓ Development environment started"
 	@echo ""
 	@echo "Services available at:"
@@ -152,7 +152,7 @@ dev-up:
 
 dev-down:
 	@echo "Stopping development environment..."
-	$(COMPOSE) -f docker-compose.yml down
+	$(COMPOSE) -f docker-compose.yml down -v
 	@echo "✓ Development environment stopped"
 
 dev-logs:

@@ -1,7 +1,7 @@
 # Linux test client for testing Active Directory integration
 # This client will attempt to join the domain and validate AD functionality
 # Uses dbus-launch for realm operations (no systemd required)
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -33,7 +33,8 @@ RUN apt-get update && \
     krb5-config \
     isc-dhcp-client \
     golang-go \
-    git && \
+    git \
+    build-essential && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 

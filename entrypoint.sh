@@ -18,7 +18,9 @@ fi
 DIB_REALM=$(echo "${DIB_REALM}" | tr '[:lower:]' '[:upper:]')
 DNS_DOMAIN=$(echo "${DIB_REALM}" | tr '[:upper:]' '[:lower:]')
 CONTAINER_HOSTNAME=$(hostname | tr '[:upper:]' '[:lower:]')
+SUBNET=$(ip route show dev "${DIB_INTERFACE}" | awk '/ link / {print $1; exit}')
 IP=$(ip addr show dev "${DIB_INTERFACE}" | awk '/inet / { split($2, a, "/"); print a[1]; exit }')
+CREATE_REVERSE_ZONE=FALSE
 
 if [ -z "${IP}" ]; then
     echo "Failed to determine an IPv4 address for DIB_INTERFACE=${DIB_INTERFACE}. Check that the interface exists and is configured." >&2
@@ -53,7 +55,6 @@ if [ ! -f /etc/samba/smb.conf ]; then
     : "${DIB_DNS_FORWARDERS:?Environment variable DIB_DNS_FORWARDERS is not set}"
 
     DIB_DOMAIN=$(echo "${DIB_DOMAIN}" | tr '[:lower:]' '[:upper:]')
-    SUBNET=$(ip route show dev "${DIB_INTERFACE}" | awk '/ link / {print $1; exit}')
     GATEWAY=$(ip route show dev "${DIB_INTERFACE}" | awk '/via/ {print $3; exit}')
 
     if [ -z "${SUBNET}" ] || [ -z "${GATEWAY}" ]; then
@@ -62,19 +63,18 @@ if [ ! -f /etc/samba/smb.conf ]; then
     fi
 
     TSIG_SECRET=$(tsig-keygen -a hmac-sha256 server-tsig | awk -F'"' '/secret/ {print $2; exit}')
-    REVERSE_ZONE=$(echo "${SUBNET}" | cut -d/ -f1 | awk -F. '{print $3"."$2"."$1".in-addr.arpa"}')
-    PTR_RECORD=$(echo "${IP}" | awk -F. '{print $4}')
 
     # Configure Samba
     echo "Provisioning Samba domain..."
     samba-tool domain provision --use-rfc2307 --realm="${DIB_REALM}" --domain="${DIB_DOMAIN}" --server-role=dc --dns-backend=BIND9_DLZ --adminpass="${DIB_DOMAIN_ADMIN_PASSWORD}" --host-name="${CONTAINER_HOSTNAME}" --host-ip="${IP}" --option "bind interfaces only = yes" --option "interfaces = lo ${DIB_INTERFACE}" --option "log file = /var/log/samba/%m.log" --option "max log size = 10000"
-    
+
     echo "Configuring Samba RPC and NTP integration..."
     sed -i '/^\[global\]/,/^\[/{
         /^\[global\]/b
         /^\[/i\
 \trpc server dynamic port range = 49152-49252\
 \tntp signd socket directory = /var/lib/samba/ntp_signd\
+\tnsupdate command = /usr/bin/nsupdate -g\
 
     }' /etc/samba/smb.conf
 
@@ -82,6 +82,8 @@ if [ ! -f /etc/samba/smb.conf ]; then
     dib_configure_bind9
     dib_configure_kea
     dib_configure_chrony
+
+    CREATE_REVERSE_ZONE=TRUE
 else
     DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART="${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
 
@@ -103,6 +105,12 @@ fi
 echo "Copying Kerberos configuration..."
 cp /var/lib/samba/private/krb5.conf /etc/krb5.conf
 chown root:bind /etc/krb5.conf
+
+export CREATE_REVERSE_ZONE
+export DNS_DOMAIN
+export CONTAINER_HOSTNAME
+export IP
+export SUBNET
 
 if [ "$#" -eq 0 ]; then
     echo "Launching supervisord..."

@@ -18,7 +18,7 @@ echo "Starting PackageKit daemon..."
 /usr/lib/packagekit/packagekitd > /dev/null 2>&1 &
 sleep 1
 
-DOMAIN_CONTROLLER_IP="${DOMAIN_CONTROLLER_IP:-192.168.1.1}"
+DOMAIN_CONTROLLER_IP="${DOMAIN_CONTROLLER_IP:-192.168.2.1}"
 SERVICE_INTERFACE=$(ip route get "$DOMAIN_CONTROLLER_IP" 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") {print $(i+1); exit}}')
 SERVICE_INTERFACE=${SERVICE_INTERFACE%%@*}
 DIB_INTERFACE="${DIB_INTERFACE:-auto}"

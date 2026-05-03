@@ -27,7 +27,7 @@ func TestServicePortUsesMappedPortForLocalhost(t *testing.T) {
 }
 
 func TestServicePortUsesDefaultPortForRemoteHost(t *testing.T) {
-	got := servicePort("192.168.1.1", "389", "3389")
+	got := servicePort("192.168.2.1", "389", "3389")
 	if got != "389" {
 		t.Fatalf("servicePort() = %q, want %q", got, "389")
 	}

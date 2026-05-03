@@ -33,41 +33,31 @@ options {
         listen-on-v6 { none; };
 };
 
-zone "." IN {
-        type hint;
-        file "/usr/share/dns/root.hints";
+view "default-network" {
+        match-clients { 127.0.0.1; ${SUBNET}; };
+
+        zone "." IN {
+                type hint;
+                file "/usr/share/dns/root.hints";
+        };
+
+        zone "localhost" IN {
+                type master;
+                file "/etc/bind/db.local";
+        };
+
+        zone "127.in-addr.arpa" IN {
+                type master;
+                file "/etc/bind/db.127";
+        };
+
+        include "/var/lib/samba/bind-dns/named.conf";
 };
 
-zone "localhost" IN {
-        type master;
-        file "/etc/bind/db.local";
+view "tsig-updates" {
+        match-clients { key "server-tsig"; };
+        include "/var/lib/samba/bind-dns/named.conf";
 };
-
-zone "127.in-addr.arpa" IN {
-        type master;
-        file "/etc/bind/db.127";
-};
-
-zone "${REVERSE_ZONE}" IN {
-        type master;
-        file "/etc/bind/${REVERSE_ZONE}.zone";
-};
-
-include "/var/lib/samba/bind-dns/named.conf";
-EOF
-
-    echo "Writing /etc/bind/${REVERSE_ZONE}.zone..."
-    tee "/etc/bind/${REVERSE_ZONE}.zone" >/dev/null <<EOF
-\$TTL 86400
-@   IN SOA ${CONTAINER_HOSTNAME}.${DNS_DOMAIN}. admin.${DNS_DOMAIN}. (
-        1
-        3600
-        1800
-        604800
-        86400
-)
-    IN NS ${CONTAINER_HOSTNAME}.${DNS_DOMAIN}.
-${PTR_RECORD} IN PTR ${CONTAINER_HOSTNAME}.${DNS_DOMAIN}.
 EOF
 }
 
