@@ -13,11 +13,11 @@ spec:
   # interface instead of being sent to the cluster's primary/default network.
   config: |-
     {
-      "cniVersion": "0.3.1",
+      "cniVersion": "0.4.0",
       "name": "macvlan-network",
       "type": "macvlan",
-      "mode": "bridge",
       "master": "eth0",
+      "mode": "bridge",
       "ipam": {
         "type": "static",
         "addresses": [
@@ -50,7 +50,7 @@ metadata:
 spec:
   clusterIP: None # Headless service for StatefulSet.
   selector:
-    app: domain-controller
+    app: domain-in-a-box
   ports:
     - name: dns-tcp
       port: 53
@@ -139,11 +139,11 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: domain-controller
+      app: domain-in-a-box
   template:
     metadata:
       labels:
-        app: domain-controller
+        app: domain-in-a-box
       annotations:
         # Annotation to request a static IP via Multus.
         # Update network name and desired IP as needed.
@@ -155,11 +155,15 @@ spec:
       #
       # hostname: domain-server
       # subdomain: domain-controller-svc
+      securityContext:
+        runAsUser: 0
       containers:
         - name: domain-controller
           image: gmouzourou/domain-in-a-box:latest
           securityContext:
             privileged: true
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
           env:
             - name: DIB_REALM # Update with your Kerberos/AD realm.
               value: "HOME.ARPA"
@@ -175,7 +179,7 @@ spec:
             - name: DIB_INTERFACE # Interface the container should bind Samba/BIND/Kea to.
               value: "net1" # Multus/macvlan secondary interface is usually `net1`.
             - name: DIB_DHCP_POOL # Define the DHCP lease pool; adjust as needed.
-              value: "192.168.1.100-192.168.1.200"
+              value: "192.168.1.100-192.168.1.199"
             - name: DIB_DNS_FORWARDERS # Upstream DNS servers; adjust as needed.
               value: "1.1.1.1; 8.8.8.8;"
           ports:
@@ -288,16 +292,16 @@ spec:
               mountPath: /var/log
       initContainers:
         - name: init-log-data
-          image: busybox:1.36
+          image: gmouzourou/domain-in-a-box:latest
           command:
             - sh
             - -c
             - |
+              touch /var/log/kea/kea-dhcp4.log
+              chmod 664 /var/log/kea/kea-dhcp4.log
+              chown root:_kea /var/log/kea/kea-dhcp4.log
               mkdir -p /var/log/samba/cores
               chmod 0700 /var/log/samba/cores
-              touch /var/log/kea-dhcp4.log
-              chmod 664 /var/log/kea-dhcp4.log
-              chown root:_kea /var/log/kea-dhcp4.log
           volumeMounts:
             - name: log-data
               mountPath: /var/log

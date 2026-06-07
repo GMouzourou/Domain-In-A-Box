@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	defaultDomainControllerIP = "192.168.1.1"
+	defaultDomainControllerIP = "192.168.2.1"
 	defaultRealm              = "HOME.ARPA"
 	defaultDNSDomain          = "home.arpa"
 	defaultAdminUser          = "Administrator"

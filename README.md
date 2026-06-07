@@ -237,7 +237,7 @@ The `docker-compose.yml` file includes several settings that you might want to a
   - **DIB_DOMAIN_ADMIN_PASSWORD:** Set the domain administrator password used during provisioning.
   - **DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:** Set to `true` only if you want container restarts to re-sync the Administrator password from the environment.
   - **DIB_INTERFACE:** Specify the interface to be used by your domain controller (e.g., `"eth0"`).
-  - **DIB_DHCP_POOL:** Specify the range of IP addresses to be leased (e.g., `"192.168.1.100-192.168.1.200"`); updates are applied on restart.
+  - **DIB_DHCP_POOL:** Specify the range of IP addresses to be leased (e.g., `"192.168.1.100-192.168.1.199"`); updates are applied on restart.
   - **DIB_DNS_FORWARDERS:** List upstream DNS servers (separated by semicolons); updates are applied on restart.
 
 - **Persistent Volumes:**  
@@ -314,7 +314,7 @@ services:
       DIB_DOMAIN_ADMIN_PASSWORD: "${DIB_DOMAIN_ADMIN_PASSWORD:-ChangeMeNow123!}"
       DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART: "${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
       DIB_INTERFACE: "${DIB_INTERFACE:-eth0}"
-      DIB_DHCP_POOL: "${DIB_DHCP_POOL:-192.168.1.100-192.168.1.200}"
+      DIB_DHCP_POOL: "${DIB_DHCP_POOL:-192.168.1.100-192.168.1.199}"
       DIB_DNS_FORWARDERS: "${DIB_DNS_FORWARDERS:-1.1.1.1; 8.8.8.8;}"
     volumes:
       - bind-config:/etc/bind
@@ -395,7 +395,7 @@ docker run -d \
   -e DIB_DOMAIN_ADMIN_PASSWORD="${DIB_DOMAIN_ADMIN_PASSWORD}" \
   -e DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART="false" \
   -e DIB_INTERFACE="eth0" \
-  -e DIB_DHCP_POOL="192.168.1.100-192.168.1.200" \
+  -e DIB_DHCP_POOL="192.168.1.100-192.168.1.199" \
   -e DIB_DNS_FORWARDERS="1.1.1.1; 8.8.8.8;" \
   -v bind-config:/etc/bind \
   -v bind-data:/var/cache/bind \

@@ -7,9 +7,12 @@ services:
     hostname: domain-server
     container_name: domain-in-a-box-test-server
     privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     networks:
       domain_net:
-        ipv4_address: 192.168.1.1
+        ipv4_address: 192.168.2.1
     ports:
       # DNS (using different ports to avoid host conflicts)
       - "5353:53"
@@ -37,12 +40,15 @@ services:
       DIB_REALM: "HOME.ARPA"
       DIB_DOMAIN: "HOME"
       DIB_DOMAIN_ADMIN_PASSWORD: "P@ssw0rd"
+      DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART: "false"
       DIB_INTERFACE: "eth0"
-      DIB_DHCP_POOL: "192.168.1.100-192.168.1.200"
+      DIB_DHCP_POOL: "192.168.2.100-192.168.2.199"
       DIB_DNS_FORWARDERS: "1.1.1.1; 8.8.8.8;"
     volumes:
       - bind-config:/etc/bind
       - bind-data:/var/cache/bind
+      - chrony-config:/etc/chrony
+      - chrony-data:/var/lib/chrony
       - kea-config:/etc/kea
       - kea-data:/var/lib/kea
       - samba-config:/etc/samba
@@ -53,7 +59,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 40s
     depends_on: []
 
   # Test Suite Runner
@@ -70,7 +76,7 @@ services:
     networks:
       - domain_net
     environment:
-      DOMAIN_CONTROLLER_IP: "192.168.1.1"
+      DOMAIN_CONTROLLER_IP: "192.168.2.1"
       DIB_DOMAIN: "HOME"
       DIB_REALM: "HOME.ARPA"
       DOMAIN_FQDN: "home.arpa"
@@ -79,9 +85,9 @@ services:
       SERVER_HOSTNAME: "domain-server"
       DNS_DOMAIN: "home.arpa"
       ENABLE_DHCP_CLIENT: "false"
-      DIB_DHCP_POOL: "192.168.1.100-192.168.1.200"
-      SUBNET: "192.168.1.0/24"
-      GATEWAY: "192.168.1.254"
+      DIB_DHCP_POOL: "192.168.2.100-192.168.2.199"
+      SUBNET: "192.168.2.0/24"
+      GATEWAY: "192.168.2.254"
     depends_on:
       domain-controller:
         condition: service_healthy
@@ -96,12 +102,14 @@ networks:
       parent: "eth0"
     ipam:
       config:
-        - subnet: "192.168.1.0/24"
-          gateway: "192.168.1.254"
+        - subnet: "192.168.2.0/24"
+          gateway: "192.168.2.254"
 
 volumes:
   bind-config:
   bind-data:
+  chrony-config:
+  chrony-data:
   kea-config:
   kea-data:
   samba-config:
