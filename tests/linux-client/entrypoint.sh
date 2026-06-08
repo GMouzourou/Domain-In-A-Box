@@ -87,19 +87,14 @@ cat > /etc/krb5.conf << 'KRB5_EOF'
     default_realm = HOME.ARPA
     dns_lookup_realm = false
     dns_lookup_kdc = true
-    ticket_lifetime = 24h
-    renew_lifetime = 7d
-    forwardable = true
 
 [realms]
     HOME.ARPA = {
-        kdc = domain-server.home.arpa
-        admin_server = domain-server.home.arpa
+        default_domain = home.arpa
     }
 
 [domain_realm]
-    .home.arpa = HOME.ARPA
-    home.arpa = HOME.ARPA
+    domain-controller = HOME.ARPA
 KRB5_EOF
 
 # Start SSSD daemon (needed after realm join for user lookup)

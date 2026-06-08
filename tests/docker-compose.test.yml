@@ -4,7 +4,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    hostname: domain-server
+    hostname: domain-controller
     container_name: domain-in-a-box-test-server
     privileged: true
     cap_add:
@@ -55,7 +55,7 @@ services:
       - samba-data:/var/lib/samba
       - log-data:/var/log
     healthcheck:
-      test: ["CMD", "python3", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 389), 5); s.close()"]
+      test: ["CMD", "python3", "-c", "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('127.0.0.1', 389)))"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -82,7 +82,7 @@ services:
       DOMAIN_FQDN: "home.arpa"
       ADMIN_USER: "Administrator"
       ADMIN_PASSWORD: "P@ssw0rd"
-      SERVER_HOSTNAME: "domain-server"
+      SERVER_HOSTNAME: "domain-controller"
       DNS_DOMAIN: "home.arpa"
       ENABLE_DHCP_CLIENT: "false"
       DIB_DHCP_POOL: "192.168.2.100-192.168.2.199"

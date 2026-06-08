@@ -13,7 +13,7 @@ const (
 	defaultDNSDomain          = "home.arpa"
 	defaultAdminUser          = "Administrator"
 	defaultAdminPassword      = "P@ssw0rd"
-	defaultHostname           = "domain-server"
+	defaultHostname           = "domain-controller"
 )
 
 type testConfig struct {
