@@ -20,7 +20,7 @@ DNS_DOMAIN=$(echo "${DIB_REALM}" | tr '[:upper:]' '[:lower:]')
 CONTAINER_HOSTNAME=$(hostname | tr '[:upper:]' '[:lower:]')
 SUBNET=$(ip route show dev "${DIB_INTERFACE}" | awk '/ link / {print $1; exit}')
 IP=$(ip addr show dev "${DIB_INTERFACE}" | awk '/inet / { split($2, a, "/"); print a[1]; exit }')
-CREATE_REVERSE_ZONE=FALSE
+INIT_DNS=FALSE
 
 if [ -z "${IP}" ]; then
     echo "Failed to determine an IPv4 address for DIB_INTERFACE=${DIB_INTERFACE}. Check that the interface exists and is configured." >&2
@@ -74,7 +74,7 @@ if [ ! -f /etc/samba/smb.conf ]; then
         /^\[/i\
 \trpc server dynamic port range = 49152-49252\
 \tntp signd socket directory = /var/lib/samba/ntp_signd\
-\tnsupdate command = /usr/bin/nsupdate -g\
+\tdns update command = /usr/sbin/samba_dnsupdate --use-samba-tool\
 
     }' /etc/samba/smb.conf
 
@@ -83,7 +83,7 @@ if [ ! -f /etc/samba/smb.conf ]; then
     dib_configure_kea
     dib_configure_chrony
 
-    CREATE_REVERSE_ZONE=TRUE
+    INIT_DNS=TRUE
 else
     DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART="${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
 
@@ -106,7 +106,7 @@ echo "Copying Kerberos configuration..."
 cp /var/lib/samba/private/krb5.conf /etc/krb5.conf
 chown root:bind /etc/krb5.conf
 
-export CREATE_REVERSE_ZONE
+export INIT_DNS
 export DNS_DOMAIN
 export CONTAINER_HOSTNAME
 export IP
