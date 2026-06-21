@@ -3,60 +3,53 @@
 # BIND9 configuration helpers for Domain-In-A-Box.
 
 dib_configure_bind9() {
-    echo "Configure /var/bind..."
-    chmod 775 /var/cache/bind
+    echo "Configure /var/cache/bind..."
     chown -R root:bind /var/cache/bind
+    chmod 775 /var/cache/bind
 
     echo "Writing /etc/bind/named.conf..."
     tee /etc/bind/named.conf >/dev/null <<EOF
-key "server-tsig" {
-        algorithm hmac-sha256;
-        secret "$TSIG_SECRET";
-};
+include "/etc/bind/named.conf.options";
+include "/etc/bind/named.conf.local";
+include "/etc/bind/named.conf.root-hints";
+EOF
 
+    echo "Writing /etc/bind/named.conf.options..."
+    tee /etc/bind/named.conf.options >/dev/null <<EOF
 options {
-        directory "/var/cache/bind";
-        pid-file "/run/named/named.pid";
-        tkey-gssapi-keytab "/var/lib/samba/bind-dns/dns.keytab";
-        
-        auth-nxdomain yes;
-        empty-zones-enable no;
-        minimal-responses yes;
-        notify no;
+    directory "/var/cache/bind";
+    pid-file "/run/named/named.pid";
 
-        allow-query { 127.0.0.1; ${SUBNET}; };
-        allow-update { key "server-tsig"; };
-        allow-recursion { 127.0.0.1; ${SUBNET}; };
-        allow-transfer { none; };
-        forwarders { ${DIB_DNS_FORWARDERS} };
-        listen-on port 53 { ${IP}; 127.0.0.1; };
-        listen-on-v6 { none; };
+    allow-query { 127.0.0.1; ${SUBNET}; };
+    allow-update { none; };
+    allow-recursion { 127.0.0.1; ${SUBNET}; };
+    allow-transfer { none; };
+    forwarders { ${DIB_DNS_FORWARDERS} };
+    listen-on port 5353 { ${IP}; };
+    listen-on-v6 port 5353 { none; };
+};
+EOF
+
+    echo "Writing /etc/bind/named.conf.local..."
+    tee /etc/bind/named.conf.local >/dev/null <<EOF
+zone "${DNS_DOMAIN}" {
+    type forward;
+    forward only;
+    forwarders { 127.0.0.1; };
 };
 
-view "default-network" {
-        match-clients { 127.0.0.1; ${SUBNET}; };
-
-        zone "." IN {
-                type hint;
-                file "/usr/share/dns/root.hints";
-        };
-
-        zone "localhost" IN {
-                type master;
-                file "/etc/bind/db.local";
-        };
-
-        zone "127.in-addr.arpa" IN {
-                type master;
-                file "/etc/bind/db.127";
-        };
-
-        include "/var/lib/samba/bind-dns/named.conf";
+zone "${REVERSE_ZONE}" {
+    type forward;
+    forward only;
+    forwarders { 127.0.0.1; };
 };
+EOF
 
-view "tsig-updates" {
-        match-clients { key "server-tsig"; };
-        include "/var/lib/samba/bind-dns/named.conf";
+    echo "Writing /etc/bind/named.conf.root-hints..."
+    tee /etc/bind/named.conf.root-hints >/dev/null <<EOF
+zone "." {
+    type hint;
+    file "/usr/share/dns/root.hints";
 };
 EOF
 }
