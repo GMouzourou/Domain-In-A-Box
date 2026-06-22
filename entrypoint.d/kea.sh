@@ -74,13 +74,49 @@ EOF
     tee /etc/kea/kea-dhcp-ddns.conf >/dev/null <<EOF
 {
     "DhcpDdns": {
-        "tsig-keys": [
+        "forward-ddns": {
+            "ddns-domains": [
+                {
+                    "name": "${DNS_DOMAIN}.",
+                    "dns-servers": [
+                        {
+                            "ip-address": "127.0.0.1"
+                        }
+                    ]
+                }
+            ]
+        },
+        
+        "reverse-ddns": {
+            "ddns-domains": [
+                {
+                    "name": "${REVERSE_ZONE}.",
+                    "dns-servers": [
+                        {
+                            "ip-address": "127.0.0.1"
+                        }
+                    ]
+                }
+            ]
+        },
+
+        "hooks-libraries": [
             {
-                "name": "server-tsig",
-                "algorithm": "HMAC-SHA256",
-                "secret": "$TSIG_SECRET"
+                "library": "libddns_gss_tsig.so",
+                "parameters": {
+                    "server-principal": "DNS/${CONTAINER_HOSTNAME}.${DNS_DOMAIN}@${DIB_REALM}",
+                    "client-principal": "keaddns@${DIB_REALM}",
+                    "credentials-cache": "FILE:/run/kea/keaddns.ccache",
+                    "servers": [
+                        {
+                            "id": "samba-dc",
+                            "ip-address": "127.0.0.1"
+                        }
+                    ]
+                }
             }
         ],
+
         "loggers": [
             {
                 "name": "kea-dhcp-ddns",

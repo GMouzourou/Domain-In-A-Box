@@ -19,6 +19,7 @@ DIB_REALM=$(echo "${DIB_REALM}" | tr '[:lower:]' '[:upper:]')
 DNS_DOMAIN=$(echo "${DIB_REALM}" | tr '[:upper:]' '[:lower:]')
 CONTAINER_HOSTNAME=$(hostname | tr '[:upper:]' '[:lower:]')
 SUBNET=$(ip route show dev "${DIB_INTERFACE}" | awk '/ link / {print $1; exit}')
+REVERSE_ZONE=$(echo "${SUBNET}" | cut -d/ -f1 | awk -F. '{print $3"."$2"."$1".in-addr.arpa"}')
 IP=$(ip addr show dev "${DIB_INTERFACE}" | awk '/inet / { split($2, a, "/"); print a[1]; exit }')
 INIT_DNS=FALSE
 
@@ -62,21 +63,13 @@ if [ ! -f /etc/samba/smb.conf ]; then
         exit 1
     fi
 
-    TSIG_SECRET=$(tsig-keygen -a hmac-sha256 server-tsig | awk -F'"' '/secret/ {print $2; exit}')
-
     # Configure Samba
     echo "Provisioning Samba domain..."
-    samba-tool domain provision --use-rfc2307 --realm="${DIB_REALM}" --domain="${DIB_DOMAIN}" --server-role=dc --dns-backend=BIND9_DLZ --adminpass="${DIB_DOMAIN_ADMIN_PASSWORD}" --host-name="${CONTAINER_HOSTNAME}" --host-ip="${IP}" --option "bind interfaces only = yes" --option "interfaces = lo ${DIB_INTERFACE}" --option "log file = /var/log/samba/%m.log" --option "max log size = 10000"
-
-    echo "Configuring Samba RPC and NTP integration..."
-    sed -i '/^\[global\]/,/^\[/{
-        /^\[global\]/b
-        /^\[/i\
-\trpc server dynamic port range = 49152-49252\
-\tntp signd socket directory = /var/lib/samba/ntp_signd\
-\tdns update command = /usr/sbin/samba_dnsupdate --use-samba-tool\
-
-    }' /etc/samba/smb.conf
+    samba-tool domain provision --realm="${DIB_REALM}" --domain="${DIB_DOMAIN}" --server-role=dc --use-rfc2307 --dns-backend=SAMBA_INTERNAL \
+        --adminpass="${DIB_DOMAIN_ADMIN_PASSWORD}" --host-name="${CONTAINER_HOSTNAME}" --host-ip="${IP}" \
+        --option "bind interfaces only = yes" --option "interfaces = lo ${DIB_INTERFACE}" --option "dns forwarder = ${IP}:5353" \
+        --option "rpc server dynamic port range = 49152-49252" --option "ntp signd socket directory = /var/lib/samba/ntp_signd" \
+        --option "log file = /var/log/samba/%m.log" --option "max log size = 10000"
 
     # Configure service-specific files.
     dib_configure_bind9
@@ -104,6 +97,8 @@ fi
 # Configure Kerberos
 echo "Copying Kerberos configuration..."
 cp /var/lib/samba/private/krb5.conf /etc/krb5.conf
+sed -i 's/^[[:space:]]*dns_lookup_kdc[[:space:]]*=[[:space:]]*true/ \tdns_lookup_kdc = false/' /etc/krb5.conf
+sed -i "/^${DIB_REALM}[[:space:]]*=/a\\\\tkdc = ${IP}\n\\tadmin_server = ${IP}" /etc/krb5.conf
 chown root:bind /etc/krb5.conf
 
 export INIT_DNS
@@ -111,6 +106,7 @@ export DNS_DOMAIN
 export CONTAINER_HOSTNAME
 export IP
 export SUBNET
+export REVERSE_ZONE
 
 if [ "$#" -eq 0 ]; then
     echo "Launching supervisord..."

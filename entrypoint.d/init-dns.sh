@@ -8,7 +8,52 @@ fi
 
 : "${INIT_DNS:?Environment variable INIT_DNS is not set}"
 
+run_and_log() {
+    info_msg=$1
+    log_prefix=$2
+    success_msg=$3
+    fail_msg=$4
+    shift 4
+
+    echo "$info_msg"
+    CMD_OUTPUT=$("$@" 2>&1)
+    EXIT_CODE=$?
+
+    if [ -n "$CMD_OUTPUT" ]; then
+        printf "%s\n" "$CMD_OUTPUT" | while read -r line; do
+            [ -n "$line" ] && echo "${log_prefix}: $line"
+        done
+    fi
+
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo "$fail_msg"
+        exit 1
+    fi
+
+    echo "$success_msg"
+}
+
 if [ "$INIT_DNS" = "FALSE" ]; then
+    touch /run/kea/keaddns.ccache
+
+    run_and_log \
+        "Initialising Kerberos cache for keaddns" \
+        "kinit" \
+        "Kerberos cache for keaddns initialised successfully." \
+        "Failed to initialise Kerberos cache for keaddns" \
+        env KRB5CCNAME=FILE:/run/kea/keaddns.ccache kinit -kt /var/lib/kea/keaddns.keytab "keaddns@${DIB_REALM}"
+
+    chown root:_kea /run/kea/keaddns.ccache
+    chmod 660 /run/kea/keaddns.ccache
+    CRON_LINE="0 */4 * * * KRB5CCNAME=FILE:/run/kea/keaddns.ccache /usr/bin/kinit -kt /var/lib/kea/keaddns.keytab keaddns@${DIB_REALM}"
+
+    run_and_log \
+        "Creating cron job for Kerberos cache renewal" \
+        "crontab" \
+        "Cron job for Kerberos cache renewal created successfully." \
+        "Failed to create cron job for Kerberos cache renewal" \
+        sh -c "(crontab -u _kea -l 2>/dev/null; echo \"$CRON_LINE\") | crontab -u _kea -"
+
     exit 0
 fi
 
@@ -17,8 +62,8 @@ if [ "$INIT_DNS" != "TRUE" ]; then
     exit 1
 fi
 
-echo "Waiting for BIND to start on port 53..."
-while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('127.0.0.1', 53)))" 2>/dev/null; do
+echo "Waiting for BIND to start on port 5353..."
+while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('${IP}', 5353)))" 2>/dev/null; do
     sleep 1
 done
 
@@ -27,62 +72,102 @@ while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_
     sleep 1
 done
 
+: "${DIB_REALM:?Environment variable DIB_REALM is not set}"
 : "${DNS_DOMAIN:?Environment variable DNS_DOMAIN is not set}"
 : "${CONTAINER_HOSTNAME:?Environment variable CONTAINER_HOSTNAME is not set}"
 : "${IP:?Environment variable IP is not set}"
 : "${SUBNET:?Environment variable SUBNET is not set}"
+: "${REVERSE_ZONE:?Environment variable REVERSE_ZONE is not set}"
 : "${DIB_DOMAIN_ADMIN_PASSWORD:?Environment variable DIB_DOMAIN_ADMIN_PASSWORD is not set}"
 
-REVERSE_ZONE=$(echo "${SUBNET}" | cut -d/ -f1 | awk -F. '{print $3"."$2"."$1".in-addr.arpa"}')
-
-echo "Creating reverse zone ${REVERSE_ZONE}..."
-ZONE_OUTPUT=$(samba-tool dns zonecreate 127.0.0.1 "${REVERSE_ZONE}" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}" 2>&1)
-ZONE_EXIT_CODE=$?
-
-printf "%s\n" "$ZONE_OUTPUT" | while read -r line; do
-    [ -n "$line" ] && echo "samba-tool zonecreate: $line"
-done
-
-if [ $ZONE_EXIT_CODE -ne 0 ]; then
-    echo "Failed to create reverse zone or it already exists."
-    exit 1
-fi
-
-echo "Reverse zone ${REVERSE_ZONE} created successfully."
+run_and_log \
+    "Creating reverse zone ${REVERSE_ZONE}..." \
+    "samba-tool zonecreate" \
+    "Reverse zone ${REVERSE_ZONE} created successfully." \
+    "Failed to create reverse zone or it already exists." \
+    samba-tool dns zonecreate 127.0.0.1 "${REVERSE_ZONE}" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}"
 
 PTR_RECORD=$(echo "${IP}" | awk -F. '{print $4}')
 
-echo "Adding PTR record ${PTR_RECORD} with value ${CONTAINER_HOSTNAME}.${DNS_DOMAIN}"
-PTR_OUTPUT=$(samba-tool dns add 127.0.0.1 "${REVERSE_ZONE}" "${PTR_RECORD}" PTR "${CONTAINER_HOSTNAME}.${DNS_DOMAIN}" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}" 2>&1)
-PTR_EXIT_CODE=$?
+run_and_log \
+    "Adding PTR record ${PTR_RECORD} with value ${CONTAINER_HOSTNAME}.${DNS_DOMAIN}" \
+    "samba-tool PTR" \
+    "PTR record ${PTR_RECORD} created successfully." \
+    "Failed to create PTR record ${PTR_RECORD} in reverse zone ${REVERSE_ZONE}" \
+    samba-tool dns add 127.0.0.1 "${REVERSE_ZONE}" "${PTR_RECORD}" PTR "${CONTAINER_HOSTNAME}.${DNS_DOMAIN}" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}"
 
-printf "%s\n" "$PTR_OUTPUT" | while read -r line; do
-    [ -n "$line" ] && echo "samba-tool PTR: $line"
-done
-
-if [ $PTR_EXIT_CODE -ne 0 ]; then
-    echo "Failed to create PTR record ${PTR_RECORD} in reverse zone ${REVERSE_ZONE}."
-    exit 1
-fi
-
-echo "PTR record ${PTR_RECORD} created successfully."
-
+NETBIOS_NAME=$(testparm -s --parameter-name="netbios name" 2>/dev/null)
 if [ ${#CONTAINER_HOSTNAME} -gt 15 ]; then
-    NETBIOS_NAME=$(testparm -s --parameter-name="netbios name" 2>/dev/null)
-    echo "Adding ${CONTAINER_HOSTNAME} CNAME record for ${NETBIOS_NAME}.${DNS_DOMAIN} in zone ${DNS_DOMAIN}"
-    CNAME_OUTPUT=$(samba-tool dns add 127.0.0.1 "${DNS_DOMAIN}" "${CONTAINER_HOSTNAME}" CNAME "${NETBIOS_NAME}.${DNS_DOMAIN}" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}" 2>&1)
-    CNAME_EXIT_CODE=$?
-
-    printf "%s\n" "$CNAME_OUTPUT" | while read -r line; do
-        [ -n "$line" ] && echo "samba-tool CNAME: $line"
-    done
-
-    if [ $CNAME_EXIT_CODE -ne 0 ]; then
-        echo "Failed to create ${CONTAINER_HOSTNAME} CNAME record for ${NETBIOS_NAME}.${DNS_DOMAIN} in zone ${DNS_DOMAIN}."
-        exit 1
-    fi
-
-    echo "CNAME record ${CONTAINER_HOSTNAME} created successfully."
+    run_and_log \
+        "Adding CNAME record ${CONTAINER_HOSTNAME} for ${NETBIOS_NAME}.${DNS_DOMAIN} in zone ${DNS_DOMAIN}" \
+        "samba-tool CNAME" \
+        "CNAME record ${CONTAINER_HOSTNAME} created successfully." \
+        "Failed to create CNAME record ${CONTAINER_HOSTNAME} for ${NETBIOS_NAME}.${DNS_DOMAIN} in zone ${DNS_DOMAIN}" \
+        samba-tool dns add 127.0.0.1 "${DNS_DOMAIN}" "${CONTAINER_HOSTNAME}" CNAME "${NETBIOS_NAME}.${DNS_DOMAIN}" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}"
 fi
+
+run_and_log \
+    "Adding SPN record for ${CONTAINER_HOSTNAME}.${DNS_DOMAIN}" \
+    "samba-tool spn ${CONTAINER_HOSTNAME}.${DNS_DOMAIN}" \
+    "SPN record for ${CONTAINER_HOSTNAME}.${DNS_DOMAIN} created successfully." \
+    "Failed to create SPN record for ${CONTAINER_HOSTNAME}.${DNS_DOMAIN}" \
+    samba-tool spn add DNS/"${CONTAINER_HOSTNAME}"."${DNS_DOMAIN}" "${NETBIOS_NAME}$" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}"
+
+run_and_log \
+    "Adding SPN record for ${NETBIOS_NAME}" \
+    "samba-tool spn ${NETBIOS_NAME}" \
+    "SPN record for ${NETBIOS_NAME} created successfully." \
+    "Failed to create SPN record for ${NETBIOS_NAME}" \
+    samba-tool spn add DNS/"${NETBIOS_NAME}" "${NETBIOS_NAME}$" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}"
+
+run_and_log \
+    "Creating user account for keaddns" \
+    "samba-tool user" \
+    "User account created successfully." \
+    "Failed to create user account for keaddns" \
+    samba-tool user create keaddns --description="Kea DHCP DDNS GSS-TSIG service account" --random-password
+
+run_and_log \
+    "Setting expiry for keaddns" \
+    "samba-tool user setexpiry" \
+    "User account expiry set successfully." \
+    "Failed to set expiry for keaddns" \
+    samba-tool user setexpiry keaddns --noexpiry
+
+run_and_log \
+    "Adding keaddns to DnsAdmins group" \
+    "samba-tool group" \
+    "keaddns added to DnsAdmins group successfully." \
+    "Failed to add keaddns to DnsAdmins group" \
+    samba-tool group addmembers DnsAdmins keaddns
+
+run_and_log \
+    "Exporting keytab for keaddns" \
+    "samba-tool domain exportkeytab" \
+    "Keytab for keaddns exported successfully." \
+    "Failed to export keytab for keaddns" \
+    samba-tool domain exportkeytab /var/lib/kea/keaddns.keytab --principal=keaddns@"${DIB_REALM}"
+
+chown root:_kea /var/lib/kea/keaddns.keytab
+chmod 660 /var/lib/kea/keaddns.keytab
+touch /run/kea/keaddns.ccache
+
+run_and_log \
+    "Initialising Kerberos cache for keaddns" \
+    "kinit" \
+    "Kerberos cache for keaddns initialised successfully." \
+    "Failed to initialise Kerberos cache for keaddns" \
+    env KRB5CCNAME=FILE:/run/kea/keaddns.ccache kinit -kt /var/lib/kea/keaddns.keytab "keaddns@${DIB_REALM}"
+
+chown root:_kea /run/kea/keaddns.ccache
+chmod 660 /run/kea/keaddns.ccache
+CRON_LINE="0 */4 * * * KRB5CCNAME=FILE:/run/kea/keaddns.ccache /usr/bin/kinit -kt /var/lib/kea/keaddns.keytab keaddns@${DIB_REALM}"
+
+run_and_log \
+    "Creating cron job for Kerberos cache renewal" \
+    "crontab" \
+    "Cron job for Kerberos cache renewal created successfully." \
+    "Failed to create cron job for Kerberos cache renewal" \
+    sh -c "(crontab -u _kea -l 2>/dev/null; echo \"$CRON_LINE\") | crontab -u _kea -"
 
 exit 0
