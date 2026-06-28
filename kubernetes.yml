@@ -5,6 +5,7 @@ apiVersion: k8s.cni.cncf.io/v1
 kind: NetworkAttachmentDefinition
 metadata:
   name: macvlan-network # Reference this name in pod annotations to request this network
+  namespace: domain-in-a-box
 spec:
   # Replace "eth0" with your actual host network interface name.
   # "address" sets the static IP address for the domain controller,
@@ -37,6 +38,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: domain-in-a-box-secret
+  namespace: domain-in-a-box
 type: Opaque
 stringData:
   domain-admin-password: "CHANGE_ME_BEFORE_APPLYING"
@@ -46,9 +48,11 @@ stringData:
 apiVersion: v1
 kind: Service
 metadata:
-  name: domain-controller-svc
+  name: domain-server-svc
+  namespace: domain-in-a-box
 spec:
   clusterIP: None # Headless service for StatefulSet.
+  publishNotReadyAddresses: true
   selector:
     app: domain-in-a-box
   ports:
@@ -128,14 +132,34 @@ spec:
       port: 3269
       targetPort: 3269
       protocol: TCP
+    - name: alt-dns-tcp
+      port: 5353
+      targetPort: 5353
+      protocol: TCP
+    - name: alt-dns-udp
+      port: 5353
+      targetPort: 5353
+      protocol: UDP
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dib-pdb
+  namespace: domain-in-a-box
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: domain-in-a-box
 ---
 # The StatefulSet defines a single replica of your domain controller with persistent volumes.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: domain-controller
+  name: domain-server
+  namespace: domain-in-a-box
 spec:
-  serviceName: domain-controller-svc
+  serviceName: domain-server-svc
   replicas: 1
   selector:
     matchLabels:
@@ -150,15 +174,15 @@ spec:
         k8s.v1.cni.cncf.io/networks: '[{ "name": "macvlan-network" }]'
     spec:
       # StatefulSets derive pod hostnames from the StatefulSet name and ordinal
-      # (for example, `domain-controller-0`), so a manual `hostname:` override
+      # (for example, `domain-server-0`), so a manual `hostname:` override
       # here will not behave like it does for a standalone Pod.
       #
       # hostname: domain-server
-      # subdomain: domain-controller-svc
+      # subdomain: domain-server-svc
       securityContext:
         runAsUser: 0
       containers:
-        - name: domain-controller
+        - name: domain-server
           image: gmouzourou/domain-in-a-box:latest
           securityContext:
             privileged: true
@@ -240,6 +264,12 @@ spec:
             - name: gc-ssl
               containerPort: 3269
               protocol: TCP
+            - name: alt-dns-tcp
+              containerPort: 5353
+              protocol: TCP
+            - name: alt-dns-udp
+              containerPort: 5353
+              protocol: UDP
           # Kubernetes does not support declaring a port *range* here, so allow
           # `DIB_RPC_PORT_RANGE` (default `49152-49252/tcp`) in your firewall,
           # load balancer, or CNI policy separately if external clients need it.
@@ -258,36 +288,21 @@ spec:
               command: ["python3", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 389), 5); s.close()"]
             periodSeconds: 10
             failureThreshold: 30
-          readinessProbe:
-            exec:
-              command: ["python3", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 389), 5); s.close()"]
-            periodSeconds: 10
-            failureThreshold: 6
           volumeMounts:
-            - name: dib-data
+            - name: bind-config
               mountPath: /etc/bind
-              subPath: etc-bind
-            - name: dib-data
+            - name: bind-data
               mountPath: /var/cache/bind
-              subPath: var-cache-bind
-            - name: dib-data
+            - name: chrony-config
               mountPath: /etc/chrony
-              subPath: etc-chrony
-            - name: dib-data
+            - name: chrony-data
               mountPath: /var/lib/chrony
-              subPath: var-lib-chrony
-            - name: dib-data
+            - name: kea-config
               mountPath: /etc/kea
-              subPath: etc-kea
-            - name: dib-data
+            - name: kea-data
               mountPath: /var/lib/kea
-              subPath: var-lib-kea
-            - name: dib-data
-              mountPath: /etc/samba
-              subPath: etc-samba
-            - name: dib-data
+            - name: samba-data
               mountPath: /var/lib/samba
-              subPath: var-lib-samba
             - name: log-data
               mountPath: /var/log
       initContainers:
@@ -297,24 +312,80 @@ spec:
             - sh
             - -c
             - |
+              mkdir -p /var/log/kea /var/log/samba/cores
               touch /var/log/kea/kea-dhcp4.log
               chmod 664 /var/log/kea/kea-dhcp4.log
               chown root:_kea /var/log/kea/kea-dhcp4.log
-              mkdir -p /var/log/samba/cores
               chmod 0700 /var/log/samba/cores
           volumeMounts:
             - name: log-data
               mountPath: /var/log
           securityContext:
             runAsUser: 0
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - domain-in-a-box
+              topologyKey: "kubernetes.io/hostname"
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
   volumeClaimTemplates:
     - metadata:
-        name: dib-data
+        name: bind-config
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 2Gi
+            storage: 32Mi
+    - metadata:
+        name: bind-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 512Mi
+    - metadata:
+        name: chrony-config
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 32Mi
+    - metadata:
+        name: chrony-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 64Mi
+    - metadata:
+        name: kea-config
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 32Mi
+    - metadata:
+        name: kea-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 512Mi
+    - metadata:
+        name: samba-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
     - metadata:
         name: log-data
       spec:

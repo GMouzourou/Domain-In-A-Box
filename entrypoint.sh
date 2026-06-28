@@ -21,10 +21,17 @@ CONTAINER_HOSTNAME=$(hostname | tr '[:upper:]' '[:lower:]')
 SUBNET=$(ip route show dev "${DIB_INTERFACE}" | awk '/ link / {print $1; exit}')
 REVERSE_ZONE=$(echo "${SUBNET}" | cut -d/ -f1 | awk -F. '{print $3"."$2"."$1".in-addr.arpa"}')
 IP=$(ip addr show dev "${DIB_INTERFACE}" | awk '/inet / { split($2, a, "/"); print a[1]; exit }')
+GATEWAY=$(ip route show dev "${DIB_INTERFACE}" | awk '/via/ {print $3; exit}')
 INIT_DNS=FALSE
+PROVISION_SENTINEL=/var/lib/samba/.dib-provisioned
 
 if [ -z "${IP}" ]; then
     echo "Failed to determine an IPv4 address for DIB_INTERFACE=${DIB_INTERFACE}. Check that the interface exists and is configured." >&2
+    exit 1
+fi
+
+if [ -z "${SUBNET}" ] || [ -z "${GATEWAY}" ]; then
+    echo "Failed to determine subnet/gateway for DIB_INTERFACE=${DIB_INTERFACE}. Ensure the selected interface has a connected subnet and a route via your LAN gateway." >&2
     exit 1
 fi
 
@@ -46,22 +53,29 @@ ${new_line}
 wq
 EOF
 
-if [ ! -f /etc/samba/smb.conf ]; then
+: "${DIB_DHCP_POOL:?Environment variable DIB_DHCP_POOL is not set}"
+: "${DIB_DNS_FORWARDERS:?Environment variable DIB_DNS_FORWARDERS is not set}"
+
+# Keep Samba config and state on the same persistent volume without using subPath.
+mkdir -p /var/lib/samba/etc-samba
+if [ ! -L /etc/samba ]; then
+    rm -rf /etc/samba
+    ln -s /var/lib/samba/etc-samba /etc/samba
+fi
+
+if [ -f "${PROVISION_SENTINEL}" ] && [ ! -f /etc/samba/smb.conf ]; then
+    echo "Samba state exists (${PROVISION_SENTINEL}) but /etc/samba/smb.conf is missing. Restore /var/lib/samba from backup or remove Samba state to re-provision." >&2
+    exit 1
+fi
+
+if [ ! -f "${PROVISION_SENTINEL}" ]; then
     echo "Running first time setup..."
 
     # Process variables
     : "${DIB_DOMAIN:?Environment variable DIB_DOMAIN is not set}"
     : "${DIB_DOMAIN_ADMIN_PASSWORD:?Environment variable DIB_DOMAIN_ADMIN_PASSWORD is not set}"
-    : "${DIB_DHCP_POOL:?Environment variable DIB_DHCP_POOL is not set}"
-    : "${DIB_DNS_FORWARDERS:?Environment variable DIB_DNS_FORWARDERS is not set}"
 
     DIB_DOMAIN=$(echo "${DIB_DOMAIN}" | tr '[:lower:]' '[:upper:]')
-    GATEWAY=$(ip route show dev "${DIB_INTERFACE}" | awk '/via/ {print $3; exit}')
-
-    if [ -z "${SUBNET}" ] || [ -z "${GATEWAY}" ]; then
-        echo "Failed to determine subnet/gateway for DIB_INTERFACE=${DIB_INTERFACE}. Ensure the selected interface has a connected subnet and a route via your LAN gateway." >&2
-        exit 1
-    fi
 
     # Configure Samba
     echo "Provisioning Samba domain..."
@@ -71,10 +85,7 @@ if [ ! -f /etc/samba/smb.conf ]; then
         --option "rpc server dynamic port range = 49152-49252" --option "ntp signd socket directory = /var/lib/samba/ntp_signd" \
         --option "log file = /var/log/samba/%m.log" --option "max log size = 10000"
 
-    # Configure service-specific files.
-    dib_configure_bind9
-    dib_configure_kea
-    dib_configure_chrony
+    touch "${PROVISION_SENTINEL}"
 
     INIT_DNS=TRUE
 else
@@ -88,10 +99,17 @@ else
             samba-tool user setpassword Administrator --newpassword="${DIB_DOMAIN_ADMIN_PASSWORD}" >/dev/null  
         fi
     fi
+fi
 
+# Ensure required config files exist without overwriting user-managed customizations.
+dib_configure_bind9
+dib_configure_kea
+dib_configure_chrony
+
+if [ "$INIT_DNS" = "FALSE" ]; then
     echo "Updating DHCP pool and DNS forwarders from latest configuration..."
-    dib_update_kea_dhcp_pool
     dib_update_bind_forwarders
+    dib_update_kea_dhcp_pool
 fi
 
 # Configure Kerberos
@@ -108,7 +126,25 @@ export IP
 export SUBNET
 export REVERSE_ZONE
 
+validate_service_configs() {
+    echo "Validating Samba config..."
+    testparm -s >/dev/null
+
+    echo "Validating BIND config..."
+    named-checkconf /etc/bind/named.conf
+
+    echo "Validating Kea DHCP4 config..."
+    /usr/sbin/kea-dhcp4 -t /etc/kea/kea-dhcp4.conf >/dev/null
+
+    echo "Validating Kea DHCP-DDNS config..."
+    /usr/sbin/kea-dhcp-ddns -t /etc/kea/kea-dhcp-ddns.conf >/dev/null
+
+    echo "Validating Chrony config..."
+    chronyd -p -f /etc/chrony/chrony.conf >/dev/null
+}
+
 if [ "$#" -eq 0 ]; then
+    validate_service_configs
     echo "Launching supervisord..."
     exec /usr/bin/supervisord -c /etc/supervisord.conf
 else

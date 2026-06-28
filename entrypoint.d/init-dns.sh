@@ -8,6 +8,21 @@ fi
 
 : "${INIT_DNS:?Environment variable INIT_DNS is not set}"
 
+echo "Waiting for BIND to start on port 5353..."
+while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('${IP}', 5353)))" 2>/dev/null; do
+    sleep 1
+done
+
+echo "Waiting for Samba LDAP on port 389..."
+while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('127.0.0.1', 389)))" 2>/dev/null; do
+    sleep 1
+done
+
+echo "Waiting for Samba KDC on port 88..."
+while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('127.0.0.1', 88)))" 2>/dev/null; do
+    sleep 1
+done
+
 run_and_log() {
     info_msg=$1
     log_prefix=$2
@@ -34,6 +49,13 @@ run_and_log() {
 }
 
 if [ "$INIT_DNS" = "FALSE" ]; then
+    : "${DIB_REALM:?Environment variable DIB_REALM is not set}"
+
+    if [ ! -s /var/lib/kea/keaddns.keytab ]; then
+        echo "Keytab /var/lib/kea/keaddns.keytab is missing or empty"
+        exit 1
+    fi
+
     touch /run/kea/keaddns.ccache
 
     run_and_log \
@@ -61,16 +83,6 @@ if [ "$INIT_DNS" != "TRUE" ]; then
     echo "Unexpected value for INIT_DNS: $INIT_DNS"
     exit 1
 fi
-
-echo "Waiting for BIND to start on port 5353..."
-while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('${IP}', 5353)))" 2>/dev/null; do
-    sleep 1
-done
-
-echo "Waiting for Samba LDAP on port 389..."
-while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('127.0.0.1', 389)))" 2>/dev/null; do
-    sleep 1
-done
 
 : "${DIB_REALM:?Environment variable DIB_REALM is not set}"
 : "${DNS_DOMAIN:?Environment variable DNS_DOMAIN is not set}"

@@ -43,6 +43,7 @@ RUN apt-get update && \
     cp /tmp/kea-Kea-3.0.3/build/src/hooks/d2/gss_tsig/libddns_gss_tsig.so "/usr/lib/$arch/kea/hooks/libddns_gss_tsig.so" && \
     apt-get autoremove -y && \
     apt-get clean && \
+    setcap 'cap_net_admin,cap_net_raw=+ep' /usr/sbin/kea-dhcp4 && \
     rm -rf /var/lib/apt/lists/* /tmp/kea-Kea-3.0.3.tar.gz /tmp/kea-Kea-3.0.3 && \
     \
     mkdir -p /run/named /run/kea /var/log/kea /var/log/samba/cores && \
@@ -50,8 +51,15 @@ RUN apt-get update && \
     chmod 700 /var/log/samba/cores && \
     chown -R root:bind /run/named && \
     chown -R root:_kea /run/kea /var/log/kea && \
-    rm /etc/samba/smb.conf
+    rm -f /etc/samba/smb.conf \
+        /etc/bind/named.conf \
+        /etc/bind/named.conf.options \
+        /etc/bind/named.conf.local \
+        /etc/bind/named.conf.root-hints \
+        /etc/kea/kea-dhcp4.conf \
+        /etc/kea/kea-dhcp-ddns.conf \
+        /etc/chrony/chrony.conf
 
-EXPOSE 53 53/udp 67/udp 68/udp 88 88/udp 123/udp 135 137/udp 138/udp 139 389 389/udp 445 464 464/udp 636 3268 3269 49152-49252/tcp
+EXPOSE 53 53/udp 67/udp 68/udp 88 88/udp 123/udp 135 137/udp 138/udp 139 389 389/udp 445 464 464/udp 636 3268 3269 5353 5353/udp 49152-49252/tcp
 
 ENTRYPOINT ["/entrypoint.sh"]

@@ -7,8 +7,9 @@ dib_configure_kea() {
     chmod 775 /var/lib/kea
     chown -R root:_kea /var/lib/kea
 
-    echo "Writing /etc/kea/kea-dhcp4.conf..."
-    tee /etc/kea/kea-dhcp4.conf >/dev/null <<EOF
+    if [ ! -f /etc/kea/kea-dhcp4.conf ]; then
+        echo "Writing /etc/kea/kea-dhcp4.conf..."
+        tee /etc/kea/kea-dhcp4.conf >/dev/null <<EOF
 {
     "Dhcp4": {
         "interfaces-config": {
@@ -69,9 +70,13 @@ dib_configure_kea() {
     }
 }
 EOF
+    else
+        echo "Keeping existing /etc/kea/kea-dhcp4.conf"
+    fi
 
-    echo "Writing /etc/kea/kea-dhcp-ddns.conf..."
-    tee /etc/kea/kea-dhcp-ddns.conf >/dev/null <<EOF
+    if [ ! -f /etc/kea/kea-dhcp-ddns.conf ]; then
+        echo "Writing /etc/kea/kea-dhcp-ddns.conf..."
+        tee /etc/kea/kea-dhcp-ddns.conf >/dev/null <<EOF
 {
     "DhcpDdns": {
         "forward-ddns": {
@@ -131,6 +136,9 @@ EOF
     }
 }
 EOF
+    else
+        echo "Keeping existing /etc/kea/kea-dhcp-ddns.conf"
+    fi
 }
 
 dib_update_kea_dhcp_pool() {
