@@ -4,7 +4,7 @@
 
 dib_configure_bind9() {
     echo "Configure /var/cache/bind..."
-    chown -R root:bind /var/cache/bind
+    chown root:bind /var/cache/bind
     chmod 775 /var/cache/bind
 
     if [ ! -f /etc/bind/named.conf ]; then

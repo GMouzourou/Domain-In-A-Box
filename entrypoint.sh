@@ -77,6 +77,13 @@ if [ ! -f "${PROVISION_SENTINEL}" ]; then
 
     DIB_DOMAIN=$(echo "${DIB_DOMAIN}" | tr '[:lower:]' '[:upper:]')
 
+    # Create necessary log directories and files
+    mkdir -p /var/log/kea /var/log/samba/cores
+    touch /var/log/kea/kea-dhcp4.log
+    chown -R root:_kea /var/log/kea
+    chmod -R 664 /var/log/kea
+    chmod 700 /var/log/samba/cores
+
     # Configure Samba
     echo "Provisioning Samba domain..."
     samba-tool domain provision --realm="${DIB_REALM}" --domain="${DIB_DOMAIN}" --server-role=dc --use-rfc2307 --dns-backend=SAMBA_INTERNAL \
@@ -86,7 +93,6 @@ if [ ! -f "${PROVISION_SENTINEL}" ]; then
         --option "log file = /var/log/samba/%m.log" --option "max log size = 10000"
 
     touch "${PROVISION_SENTINEL}"
-
     INIT_DNS=TRUE
 else
     DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART="${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
@@ -113,7 +119,7 @@ if [ "$INIT_DNS" = "FALSE" ]; then
 fi
 
 # Configure Kerberos
-echo "Copying Kerberos configuration..."
+echo "Setting Kerberos configuration..."
 cp /var/lib/samba/private/krb5.conf /etc/krb5.conf
 sed -i 's/^[[:space:]]*dns_lookup_kdc[[:space:]]*=[[:space:]]*true/ \tdns_lookup_kdc = false/' /etc/krb5.conf
 sed -i "/^${DIB_REALM}[[:space:]]*=/a\\\\tkdc = ${IP}\n\\tadmin_server = ${IP}" /etc/krb5.conf

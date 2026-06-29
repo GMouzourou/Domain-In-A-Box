@@ -4,8 +4,8 @@
 
 dib_configure_kea() {
     echo "Configure /var/lib/kea..."
+    chown root:_kea /var/lib/kea
     chmod 775 /var/lib/kea
-    chown -R root:_kea /var/lib/kea
 
     if [ ! -f /etc/kea/kea-dhcp4.conf ]; then
         echo "Writing /etc/kea/kea-dhcp4.conf..."
@@ -142,6 +142,11 @@ EOF
 }
 
 dib_update_kea_dhcp_pool() {
+    if [ ! -f /etc/kea/kea-dhcp4.conf ]; then
+        echo "Skipping Kea DHCP pool update: /etc/kea/kea-dhcp4.conf does not exist"
+        return 0
+    fi
+
     esc=$(printf '%s' "$DIB_DHCP_POOL" | sed 's/[\/&]/\\&/g')
     sed -i -E 's/("pool"[[:space:]]*:[[:space:]]*")[^"]*(")/\1'"$esc"'\2/' /etc/kea/kea-dhcp4.conf
 }

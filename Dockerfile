@@ -46,8 +46,8 @@ RUN apt-get update && \
     setcap 'cap_net_admin,cap_net_raw=+ep' /usr/sbin/kea-dhcp4 && \
     rm -rf /var/lib/apt/lists/* /tmp/kea-Kea-3.0.3.tar.gz /tmp/kea-Kea-3.0.3 && \
     \
-    mkdir -p /run/named /run/kea /var/log/kea /var/log/samba/cores && \
-    chmod -R 775 /entrypoint.sh /entrypoint.d /run/named /run/kea && \
+    mkdir -p /run/samba /run/named /run/kea /var/log/kea /var/log/samba/cores && \
+    chmod -R 775 /entrypoint.sh /entrypoint.d /run/samba /run/named /run/kea && \
     chmod 700 /var/log/samba/cores && \
     chown -R root:bind /run/named && \
     chown -R root:_kea /run/kea /var/log/kea && \

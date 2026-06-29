@@ -305,23 +305,6 @@ spec:
               mountPath: /var/lib/samba
             - name: log-data
               mountPath: /var/log
-      initContainers:
-        - name: init-log-data
-          image: gmouzourou/domain-in-a-box:latest
-          command:
-            - sh
-            - -c
-            - |
-              mkdir -p /var/log/kea /var/log/samba/cores
-              touch /var/log/kea/kea-dhcp4.log
-              chmod 664 /var/log/kea/kea-dhcp4.log
-              chown root:_kea /var/log/kea/kea-dhcp4.log
-              chmod 0700 /var/log/samba/cores
-          volumeMounts:
-            - name: log-data
-              mountPath: /var/log
-          securityContext:
-            runAsUser: 0
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
