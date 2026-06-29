@@ -119,20 +119,6 @@ if [ ${#CONTAINER_HOSTNAME} -gt 15 ]; then
 fi
 
 run_and_log \
-    "Adding SPN record for ${CONTAINER_HOSTNAME}.${DNS_DOMAIN}" \
-    "samba-tool spn ${CONTAINER_HOSTNAME}.${DNS_DOMAIN}" \
-    "SPN record for ${CONTAINER_HOSTNAME}.${DNS_DOMAIN} created successfully." \
-    "Failed to create SPN record for ${CONTAINER_HOSTNAME}.${DNS_DOMAIN}" \
-    samba-tool spn add DNS/"${CONTAINER_HOSTNAME}"."${DNS_DOMAIN}" "${NETBIOS_NAME}$" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}"
-
-run_and_log \
-    "Adding SPN record for ${NETBIOS_NAME}" \
-    "samba-tool spn ${NETBIOS_NAME}" \
-    "SPN record for ${NETBIOS_NAME} created successfully." \
-    "Failed to create SPN record for ${NETBIOS_NAME}" \
-    samba-tool spn add DNS/"${NETBIOS_NAME}" "${NETBIOS_NAME}$" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}"
-
-run_and_log \
     "Creating user account for keaddns" \
     "samba-tool user" \
     "User account created successfully." \
