@@ -6,7 +6,8 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-: "${INIT_DNS:?Environment variable INIT_DNS is not set}"
+: "${INIT_DOMAIN:?Environment variable INIT_DOMAIN is not set}"
+: "${DIB_REALM:?Environment variable DIB_REALM is not set}"
 
 echo "Waiting for BIND to start on port 5353..."
 while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('${IP}', 5353)))" 2>/dev/null; do
@@ -48,9 +49,7 @@ run_and_log() {
     echo "$success_msg"
 }
 
-if [ "$INIT_DNS" = "FALSE" ]; then
-    : "${DIB_REALM:?Environment variable DIB_REALM is not set}"
-
+if [ "$INIT_DOMAIN" = "FALSE" ]; then
     if [ ! -s /var/lib/kea/keaddns.keytab ]; then
         echo "Keytab /var/lib/kea/keaddns.keytab is missing or empty"
         exit 1
@@ -79,18 +78,24 @@ if [ "$INIT_DNS" = "FALSE" ]; then
     exit 0
 fi
 
-if [ "$INIT_DNS" != "TRUE" ]; then
-    echo "Unexpected value for INIT_DNS: $INIT_DNS"
+if [ "$INIT_DOMAIN" != "TRUE" ]; then
+    echo "Unexpected value for INIT_DOMAIN: $INIT_DOMAIN"
     exit 1
 fi
 
-: "${DIB_REALM:?Environment variable DIB_REALM is not set}"
 : "${DNS_DOMAIN:?Environment variable DNS_DOMAIN is not set}"
 : "${CONTAINER_HOSTNAME:?Environment variable CONTAINER_HOSTNAME is not set}"
 : "${IP:?Environment variable IP is not set}"
 : "${SUBNET:?Environment variable SUBNET is not set}"
 : "${REVERSE_ZONE:?Environment variable REVERSE_ZONE is not set}"
 : "${DIB_DOMAIN_ADMIN_PASSWORD:?Environment variable DIB_DOMAIN_ADMIN_PASSWORD is not set}"
+
+run_and_log \
+    "Raising Samba domain and forest levels..." \
+    "samba-tool domain level raise" \
+    "Samba domain and forest levels raised successfully." \
+    "Failed to raise Samba domain and forest levels." \
+    samba-tool domain level raise --domain-level=2016 --forest-level=2016
 
 run_and_log \
     "Creating reverse zone ${REVERSE_ZONE}..." \

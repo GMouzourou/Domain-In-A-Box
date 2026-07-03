@@ -22,7 +22,7 @@ SUBNET=$(ip route show dev "${DIB_INTERFACE}" | awk '/ link / {print $1; exit}')
 REVERSE_ZONE=$(echo "${SUBNET}" | cut -d/ -f1 | awk -F. '{print $3"."$2"."$1".in-addr.arpa"}')
 IP=$(ip addr show dev "${DIB_INTERFACE}" | awk '/inet / { split($2, a, "/"); print a[1]; exit }')
 GATEWAY=$(ip route show dev "${DIB_INTERFACE}" | awk '/via/ {print $3; exit}')
-INIT_DNS=FALSE
+INIT_DOMAIN=FALSE
 PROVISION_SENTINEL=/var/lib/samba/.dib-provisioned
 
 if [ -z "${IP}" ]; then
@@ -90,10 +90,10 @@ if [ ! -f "${PROVISION_SENTINEL}" ]; then
         --adminpass="${DIB_DOMAIN_ADMIN_PASSWORD}" --host-name="${CONTAINER_HOSTNAME}" --host-ip="${IP}" \
         --option "bind interfaces only = yes" --option "interfaces = lo ${DIB_INTERFACE}" --option "dns forwarder = ${IP}:5353" \
         --option "rpc server dynamic port range = 49152-49252" --option "ntp signd socket directory = /var/lib/samba/ntp_signd" \
-        --option "log file = /var/log/samba/%m.log" --option "max log size = 10000"
+        --option "ad dc functional level = 2016" --option "log file = /var/log/samba/%m.log" --option "max log size = 10000"
 
     touch "${PROVISION_SENTINEL}"
-    INIT_DNS=TRUE
+    INIT_DOMAIN=TRUE
 else
     DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART="${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
 
@@ -112,7 +112,7 @@ dib_configure_bind9
 dib_configure_kea
 dib_configure_chrony
 
-if [ "$INIT_DNS" = "FALSE" ]; then
+if [ "$INIT_DOMAIN" = "FALSE" ]; then
     echo "Updating DHCP pool and DNS forwarders from latest configuration..."
     dib_update_bind_forwarders
     dib_update_kea_dhcp_pool
@@ -125,7 +125,7 @@ sed -i 's/^[[:space:]]*dns_lookup_kdc[[:space:]]*=[[:space:]]*true/ \tdns_lookup
 sed -i "/^${DIB_REALM}[[:space:]]*=/a\\\\tkdc = ${IP}\n\\tadmin_server = ${IP}" /etc/krb5.conf
 chown root:bind /etc/krb5.conf
 
-export INIT_DNS
+export INIT_DOMAIN
 export DNS_DOMAIN
 export CONTAINER_HOSTNAME
 export IP
