@@ -51,6 +51,8 @@ services:
       - chrony-data:/var/lib/chrony
       - kea-config:/etc/kea
       - kea-data:/var/lib/kea
+      - stork-config:/etc/stork
+      - stork-data:/var/lib/stork-agent
       - samba-data:/var/lib/samba
       - log-data:/var/log
     healthcheck:
@@ -111,5 +113,7 @@ volumes:
   chrony-data:
   kea-config:
   kea-data:
+  stork-config:
+  stork-data:
   samba-data:
   log-data:

@@ -248,6 +248,8 @@ The `docker-compose.yml` file includes several settings that you might want to a
   - `chrony-data` → `/var/lib/chrony`
   - `kea-config` → `/etc/kea`
   - `kea-data` → `/var/lib/kea`
+  - `stork-config` → `/etc/stork`
+  - `stork-data` → `/var/lib/stork-agent`
   - `samba-data` → `/var/lib/samba` (also persists `/etc/samba` via startup symlink)
   - `log-data` → `/var/log`  
   *You can change these to host bind mounts if you prefer direct access to the underlying directories.*
@@ -322,6 +324,8 @@ services:
       - chrony-data:/var/lib/chrony
       - kea-config:/etc/kea
       - kea-data:/var/lib/kea
+      - stork-config:/etc/stork
+      - stork-data: /var/lib/stork-agent
       - samba-data:/var/lib/samba
       - log-data:/var/log
 
@@ -342,6 +346,8 @@ volumes:
   chrony-data:
   kea-config:
   kea-data:
+  stork-config:
+  stork-data:
   samba-data:
   log-data:
 ```
@@ -400,6 +406,8 @@ docker run -d \
   -v chrony-data:/var/lib/chrony \
   -v kea-config:/etc/kea \
   -v kea-data:/var/lib/kea \
+  -v stork-config:/etc/stork \
+  -v stork-data: /var/lib/stork-agent \
   -v samba-data:/var/lib/samba \
   -v log-data:/var/log \
   gmouzourou/domain-in-a-box:latest

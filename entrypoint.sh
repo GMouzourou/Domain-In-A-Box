@@ -10,6 +10,8 @@ fi
 . "/entrypoint.d/bind.sh"
 . "/entrypoint.d/kea.sh"
 . "/entrypoint.d/chrony.sh"
+. "/entrypoint.d/postgres.sh"
+. "/entrypoint.d/stork.sh"
 
 # Process variables
 : "${DIB_REALM:?Environment variable DIB_REALM is not set}"
@@ -111,6 +113,8 @@ fi
 dib_configure_bind9
 dib_configure_kea
 dib_configure_chrony
+dib_configure_postgresql
+dib_configure_stork
 
 if [ "$INIT_DOMAIN" = "FALSE" ]; then
     echo "Updating DHCP pool and DNS forwarders from latest configuration..."
@@ -147,6 +151,12 @@ validate_service_configs() {
 
     echo "Validating Chrony config..."
     chronyd -p -f /etc/chrony/chrony.conf >/dev/null
+
+    echo "Validating PostgreSQL cluster configuration..."
+    dib_validate_postgresql_cluster
+
+    echo "Validating Stork environment files..."
+    dib_validate_stork_configs
 }
 
 if [ "$#" -eq 0 ]; then

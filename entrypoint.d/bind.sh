@@ -33,6 +33,10 @@ options {
     listen-on port 5353 { ${IP}; };
     listen-on-v6 port 5353 { none; };
 };
+
+statistics-channels {
+    inet 127.0.0.1 port 8053 allow { 127.0.0.1; };
+};
 EOF
     else
         echo "Keeping existing /etc/bind/named.conf.options"
