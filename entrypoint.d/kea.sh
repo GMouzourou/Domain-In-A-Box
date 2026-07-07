@@ -12,6 +12,10 @@ dib_configure_kea() {
         tee /etc/kea/kea-dhcp4.conf >/dev/null <<EOF
 {
     "Dhcp4": {
+        "control-socket": {
+            "socket-type": "unix",
+            "socket-name": "/run/kea/kea4-ctrl-socket"
+        },
         "interfaces-config": {
             "interfaces": [
                 "${DIB_INTERFACE}"
@@ -79,6 +83,10 @@ EOF
         tee /etc/kea/kea-dhcp-ddns.conf >/dev/null <<EOF
 {
     "DhcpDdns": {
+        "control-socket": {
+            "socket-type": "unix",
+            "socket-name": "/run/kea/kea-ddns-ctrl-socket"
+        },
         "forward-ddns": {
             "ddns-domains": [
                 {

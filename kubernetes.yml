@@ -140,6 +140,10 @@ spec:
       port: 5353
       targetPort: 5353
       protocol: UDP
+    - name: stork-server
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -270,6 +274,9 @@ spec:
             - name: alt-dns-udp
               containerPort: 5353
               protocol: UDP
+            - name: stork-server
+              containerPort: 8080
+              protocol: TCP
           # Kubernetes does not support declaring a port *range* here, so allow
           # `DIB_RPC_PORT_RANGE` (default `49152-49252/tcp`) in your firewall,
           # load balancer, or CNI policy separately if external clients need it.
@@ -301,6 +308,10 @@ spec:
               mountPath: /etc/kea
             - name: kea-data
               mountPath: /var/lib/kea
+            - name: stork-config
+              mountPath: /etc/stork
+            - name: stork-data
+              mountPath: /var/lib/stork-agent
             - name: samba-data
               mountPath: /var/lib/samba
             - name: log-data
@@ -362,6 +373,20 @@ spec:
         resources:
           requests:
             storage: 512Mi
+    - metadata:
+        name: stork-config
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 32Mi
+    - metadata:
+        name: stork-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 32Mi
     - metadata:
         name: samba-data
       spec:
