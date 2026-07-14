@@ -1,5 +1,8 @@
 services:
   domain-controller:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: gmouzourou/domain-in-a-box:latest
     hostname: domain-server
     container_name: domain-in-a-box
