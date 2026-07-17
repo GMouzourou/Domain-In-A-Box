@@ -13,6 +13,7 @@ dib_configure_bind9() {
 include "/etc/bind/named.conf.options";
 include "/etc/bind/named.conf.local";
 include "/etc/bind/named.conf.root-hints";
+include "/etc/bind/rndc.key";
 EOF
     else
         echo "Keeping existing /etc/bind/named.conf"
@@ -71,6 +72,13 @@ zone "." {
 EOF
     else
         echo "Keeping existing /etc/bind/named.conf.root-hints"
+    fi
+
+    if [ ! -f /etc/bind/rndc.key ]; then
+        echo "Generating /etc/bind/rndc.key..."
+        rndc-confgen -a -A hmac-sha256 -c /etc/bind/rndc.key >/dev/null 2>&1
+        chown root:bind /etc/bind/rndc.key
+        chmod 640 /etc/bind/rndc.key
     fi
 }
 
