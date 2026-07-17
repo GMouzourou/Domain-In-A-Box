@@ -28,8 +28,7 @@ dib_configure_stork() {
 
             ldap_skip_tls_verification=false
             stork_tls_block="STORK_REST_TLS_CERTIFICATE=${cert_file}
-STORK_REST_TLS_PRIVATE_KEY=${key_file}
-STORK_REST_TLS_CA_CERTIFICATE=${ca_file}"
+        STORK_REST_TLS_PRIVATE_KEY=${key_file}"
         fi
 
         tee /etc/stork/server.env >/dev/null <<EOF
@@ -75,7 +74,23 @@ EOF
     fi
 }
 
-dib_register_stork_agent() {
+dib_init_stork_agent() {
+    : "${DIB_REALM:?Environment variable DIB_REALM is not set}"
+
+    role_exists=$(su -s /bin/sh -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='stork'\" postgres" postgres | tr -d '[:space:]')
+    if [ "${role_exists}" != "1" ]; then
+        DIB_STORK_DB_PASSWORD=$(sed -n 's/^[[:space:]]*STORK_DATABASE_PASSWORD[[:space:]]*=[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}[[:space:]]*$/\1/p' /etc/stork/server.env)
+        pass_escaped=$(printf "%s" "${DIB_STORK_DB_PASSWORD}" | sed "s/'/''/g")
+        su -s /bin/sh -c "psql -v ON_ERROR_STOP=1 -c \"CREATE ROLE \\\"stork\\\" LOGIN PASSWORD '${pass_escaped}'\" postgres" postgres
+    fi
+
+    db_exists=$(su -s /bin/sh -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='stork'\" postgres" postgres | tr -d '[:space:]')
+    if [ "${db_exists}" != "1" ]; then
+        su -s /bin/sh -c "psql -v ON_ERROR_STOP=1 -c \"CREATE DATABASE \\\"stork\\\" OWNER \\\"stork\\\"\" postgres" postgres
+    fi
+
+    su -s /bin/sh -c "psql -v ON_ERROR_STOP=1 -d \"stork\" -c \"CREATE EXTENSION IF NOT EXISTS pgcrypto\" postgres" postgres
+
     if [ -s "$STORK_AGENT_REGISTER_SENTINEL" ]; then
         echo "Stork agent is already registered; skipping registration."
         return 0

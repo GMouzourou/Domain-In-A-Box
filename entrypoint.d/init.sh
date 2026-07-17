@@ -40,27 +40,9 @@ run_and_log() {
     echo "$success_msg"
 }
 
-common_init() {
-    : "${DIB_REALM:?Environment variable DIB_REALM is not set}"
-
-    role_exists=$(su -s /bin/sh -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='stork'\" postgres" postgres | tr -d '[:space:]')
-    if [ "${role_exists}" != "1" ]; then
-        DIB_STORK_DB_PASSWORD=$(sed -n 's/^[[:space:]]*STORK_DATABASE_PASSWORD[[:space:]]*=[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}[[:space:]]*$/\1/p' /etc/stork/server.env)
-        pass_escaped=$(printf "%s" "${DIB_STORK_DB_PASSWORD}" | sed "s/'/''/g")
-        su -s /bin/sh -c "psql -v ON_ERROR_STOP=1 -c \"CREATE ROLE \\\"stork\\\" LOGIN PASSWORD '${pass_escaped}'\" postgres" postgres
-    fi
-
-    db_exists=$(su -s /bin/sh -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='stork'\" postgres" postgres | tr -d '[:space:]')
-    if [ "${db_exists}" != "1" ]; then
-        su -s /bin/sh -c "psql -v ON_ERROR_STOP=1 -c \"CREATE DATABASE \\\"stork\\\" OWNER \\\"stork\\\"\" postgres" postgres
-    fi
-
-    su -s /bin/sh -c "psql -v ON_ERROR_STOP=1 -d \"stork\" -c \"CREATE EXTENSION IF NOT EXISTS pgcrypto\" postgres" postgres
-
-    dib_register_stork_agent
-}
-
 std_init() {
+    dib_init_stork_agent
+
     if [ ! -s /var/lib/kea/keaddns.keytab ]; then
         echo "Keytab /var/lib/kea/keaddns.keytab is missing or empty"
         exit 1
@@ -106,8 +88,6 @@ echo "Waiting for PostgreSQL readiness..."
 while ! su -s /bin/sh -c 'pg_isready -q -d postgres' postgres 2>/dev/null; do
     sleep 1
 done
-
-common_init
 
 if [ "$INIT_DOMAIN" = "FALSE" ]; then
     std_init
@@ -203,5 +183,7 @@ run_and_log \
     "Cron job for Kerberos cache renewal created successfully." \
     "Failed to create cron job for Kerberos cache renewal" \
     sh -c "(crontab -u _kea -l 2>/dev/null; echo \"$CRON_LINE\") | crontab -u _kea -"
+
+dib_init_stork_agent
 
 exit 0
