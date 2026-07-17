@@ -96,7 +96,7 @@ dib_register_stork_agent() {
 
     echo "Registering the Stork agent with the server..."
     stork-agent register \
-        --server-url=${stork_server_scheme}://127.0.0.1:8080 \
+        --server-url=${stork_server_scheme}://${CONTAINER_HOSTNAME}.${DNS_DOMAIN}:8080 \
         --server-token="${server_token}" \
         --agent-host=127.0.0.1 \
         --agent-port=8081 \
