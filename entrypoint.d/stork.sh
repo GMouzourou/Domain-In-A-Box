@@ -79,6 +79,14 @@ dib_register_stork_agent() {
         return 0
     fi
 
+    cert_file=/certs/cert.pem
+    key_file=/certs/key.pem
+    ca_file=/certs/ca.pem
+    stork_server_scheme=http
+    if [ -e "${cert_file}" ] && [ -e "${key_file}" ] && [ -e "${ca_file}" ]; then
+        stork_server_scheme=https
+    fi
+
     echo "Waiting for Stork server on port 8080..."
     while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('127.0.0.1', 8080)))" 2>/dev/null; do
         sleep 1
@@ -88,7 +96,7 @@ dib_register_stork_agent() {
 
     echo "Registering the Stork agent with the server..."
     stork-agent register \
-        --server-url=http://127.0.0.1:8080 \
+        --server-url=${stork_server_scheme}://127.0.0.1:8080 \
         --server-token="${server_token}" \
         --agent-host=127.0.0.1 \
         --agent-port=8081 \
