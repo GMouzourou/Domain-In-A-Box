@@ -27,6 +27,36 @@ GATEWAY=$(ip route show dev "${DIB_INTERFACE}" | awk '/via/ {print $3; exit}')
 INIT_DOMAIN=FALSE
 PROVISION_SENTINEL=/var/lib/samba/.dib-provisioned
 
+dib_apply_external_samba_tls_assets() {
+    cert_file=/certs/cert.pem
+    key_file=/certs/key.pem
+    ca_file=/certs/ca.pem
+
+    if [ ! -e "$cert_file" ] && [ ! -e "$key_file" ] && [ ! -e "$ca_file" ]; then
+        return 0
+    fi
+
+    if [ ! -e "$cert_file" ] || [ ! -e "$key_file" ] || [ ! -e "$ca_file" ]; then
+        echo "Custom TLS is enabled by fixed paths. Provide /certs/cert.pem, /certs/key.pem and /certs/ca.pem together." >&2
+        exit 1
+    fi
+
+    if [ ! -s "$cert_file" ] || [ ! -s "$key_file" ] || [ ! -s "$ca_file" ]; then
+        echo "One or more custom Samba TLS files do not exist or are empty." >&2
+        exit 1
+    fi
+
+    echo "Installing custom Samba TLS assets..."
+    install -d -m 0755 /var/lib/samba/private/tls
+    install -m 0644 "$cert_file" /var/lib/samba/private/tls/cert.pem
+    install -m 0600 "$key_file" /var/lib/samba/private/tls/key.pem
+    install -m 0644 "$ca_file" /var/lib/samba/private/tls/ca.pem
+    chown root:root /var/lib/samba/private/tls/cert.pem /var/lib/samba/private/tls/key.pem /var/lib/samba/private/tls/ca.pem
+
+    install -m 0644 "$ca_file" /usr/local/share/ca-certificates/domain-in-a-box-ldap-ca.crt
+    update-ca-certificates >/dev/null 2>&1 || true
+}
+
 if [ -z "${IP}" ]; then
     echo "Failed to determine an IPv4 address for DIB_INTERFACE=${DIB_INTERFACE}. Check that the interface exists and is configured." >&2
     exit 1
@@ -108,6 +138,8 @@ else
         fi
     fi
 fi
+
+dib_apply_external_samba_tls_assets
 
 # Ensure required config files exist without overwriting user-managed customizations.
 dib_configure_bind9

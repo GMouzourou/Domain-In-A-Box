@@ -43,6 +43,26 @@ type: Opaque
 stringData:
   domain-admin-password: "CHANGE_ME_BEFORE_APPLYING"
 ---
+# Create a Certificate resource for the domain controller's TLS certificate. This will generate a Secret containing the cert, key, and CA.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: domain-in-a-box-tls
+  namespace: domain-in-a-box
+spec:
+  secretName: domain-in-a-box-tls
+  dnsNames:
+    - domain-server-0.home.arpa
+    - domain-server-0
+  issuerRef:
+    name: CLUSTER_ISSUER_NAME # Replace with your ClusterIssuer name
+    kind: ClusterIssuer
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  duration: 2160h
+  renewBefore: 360h
+---
 # This headless Service gives the StatefulSet a stable DNS identity inside the
 # cluster. LAN clients should use the Multus/macvlan IP rather than this Service.
 apiVersion: v1
@@ -316,6 +336,20 @@ spec:
               mountPath: /var/lib/samba
             - name: log-data
               mountPath: /var/log
+            - name: certs
+              mountPath: /certs
+              readOnly: true
+      volumes:
+        - name: certs
+          secret:
+            secretName: domain-in-a-box-tls
+            items:
+              - key: tls.crt
+                path: cert.pem
+              - key: tls.key
+                path: key.pem
+              - key: ca.crt
+                path: ca.pem
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
