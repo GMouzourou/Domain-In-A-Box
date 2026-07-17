@@ -46,6 +46,7 @@ RUN apt-get update && \
         ldb-tools \
         cron \
         isc-stork-server \
+        isc-stork-server-hook-ldap \
         isc-stork-agent \
         postgresql \
         postgresql-contrib \
