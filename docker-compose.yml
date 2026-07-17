@@ -41,6 +41,10 @@ services:
       - stork-data:/var/lib/stork-agent
       - samba-data:/var/lib/samba
       - log-data:/var/log
+      # Optional: bind mount fixed cert paths used by startup logic
+      # Shared cert for Samba LDAPS and Stork UI:
+      # /certs/cert.pem, /certs/key.pem, /certs/ca.pem
+      # - ./certs:/certs:ro
 
 networks:
   domain_net:
