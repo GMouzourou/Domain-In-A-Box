@@ -15,6 +15,7 @@ dib_configure_stork() {
         ldap_root=$(printf '%s' "${DNS_DOMAIN}" | awk -F. '{for (i=1; i<=NF; i++) { printf "%sDC=%s", (i==1 ? "" : ","), $i }}')
         db_password=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
         ldap_skip_tls_verification=true
+        stork_rest_port=80
         stork_tls_block=""
         cert_file=/certs/cert.pem
         key_file=/certs/key.pem
@@ -27,8 +28,9 @@ dib_configure_stork() {
             fi
 
             ldap_skip_tls_verification=false
+            stork_rest_port=443
             stork_tls_block="STORK_REST_TLS_CERTIFICATE=${cert_file}
-        STORK_REST_TLS_PRIVATE_KEY=${key_file}"
+STORK_REST_TLS_PRIVATE_KEY=${key_file}"
         fi
 
         tee /etc/stork/server.env >/dev/null <<EOF
@@ -39,7 +41,7 @@ STORK_DATABASE_USER_NAME=stork
 STORK_DATABASE_PASSWORD=${db_password}
 
 STORK_REST_HOST=0.0.0.0
-STORK_REST_PORT=8080
+STORK_REST_PORT=${stork_rest_port}
 ${stork_tls_block}
 
 STORK_SERVER_HOOK_LDAP_URL=ldaps://${CONTAINER_HOSTNAME}.${DNS_DOMAIN}:636
@@ -100,12 +102,14 @@ dib_init_stork_agent() {
     key_file=/certs/key.pem
     ca_file=/certs/ca.pem
     stork_server_scheme=http
+    stork_server_port=80
     if [ -e "${cert_file}" ] && [ -e "${key_file}" ] && [ -e "${ca_file}" ]; then
         stork_server_scheme=https
+        stork_server_port=443
     fi
 
-    echo "Waiting for Stork server on port 8080..."
-    while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('127.0.0.1', 8080)))" 2>/dev/null; do
+    echo "Waiting for Stork server on port ${stork_server_port}..."
+    while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('127.0.0.1', ${stork_server_port})))" 2>/dev/null; do
         sleep 1
     done
     
@@ -113,7 +117,7 @@ dib_init_stork_agent() {
 
     echo "Registering the Stork agent with the server..."
     stork-agent register \
-        --server-url="${stork_server_scheme}://${CONTAINER_HOSTNAME}.${DNS_DOMAIN}:8080" \
+        --server-url="${stork_server_scheme}://${CONTAINER_HOSTNAME}.${DNS_DOMAIN}:${stork_server_port}" \
         --server-token="${server_token}" \
         --agent-host=127.0.0.1 \
         --agent-port=8081 \
