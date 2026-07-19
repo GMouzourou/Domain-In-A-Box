@@ -23,16 +23,16 @@ run_and_log() {
     shift 4
 
     echo "$info_msg"
-    CMD_OUTPUT=$("$@" 2>&1)
-    EXIT_CODE=$?
+    cmd_output=$("$@" 2>&1)
+    exit_code=$?
 
-    if [ -n "$CMD_OUTPUT" ]; then
-        printf "%s\n" "$CMD_OUTPUT" | while read -r line; do
+    if [ -n "$cmd_output" ]; then
+        printf "%s\n" "$cmd_output" | while read -r line; do
             [ -n "$line" ] && echo "${log_prefix}: $line"
         done
     fi
 
-    if [ $EXIT_CODE -ne 0 ]; then
+    if [ $exit_code -ne 0 ]; then
         echo "$fail_msg"
         exit 1
     fi
@@ -59,14 +59,14 @@ std_init() {
 
     chown root:_kea /run/kea/keaddns.ccache
     chmod 660 /run/kea/keaddns.ccache
-    CRON_LINE="0 */4 * * * KRB5CCNAME=FILE:/run/kea/keaddns.ccache /usr/bin/kinit -kt /var/lib/kea/keaddns.keytab keaddns@${DIB_REALM}"
+    cron_line="0 */4 * * * KRB5CCNAME=FILE:/run/kea/keaddns.ccache /usr/bin/kinit -kt /var/lib/kea/keaddns.keytab keaddns@${DIB_REALM}"
 
     run_and_log \
         "Creating cron job for Kerberos cache renewal" \
         "crontab" \
         "Cron job for Kerberos cache renewal created successfully." \
         "Failed to create cron job for Kerberos cache renewal" \
-        sh -c "(crontab -u _kea -l 2>/dev/null; echo \"$CRON_LINE\") | crontab -u _kea -"
+        sh -c "(crontab -u _kea -l 2>/dev/null; echo \"$cron_line\") | crontab -u _kea -"
 }
 
 echo "Waiting for BIND to start on port 5353..."
@@ -115,23 +115,23 @@ run_and_log \
     "Failed to create reverse zone or it already exists." \
     samba-tool dns zonecreate 127.0.0.1 "${REVERSE_ZONE}" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}"
 
-PTR_RECORD=$(echo "${IP}" | awk -F. '{print $4}')
+ptr_record=$(echo "${IP}" | awk -F. '{print $4}')
 
 run_and_log \
-    "Adding PTR record ${PTR_RECORD} with value ${CONTAINER_HOSTNAME}.${DNS_DOMAIN}" \
+    "Adding PTR record ${ptr_record} with value ${CONTAINER_HOSTNAME}.${DNS_DOMAIN}" \
     "samba-tool PTR" \
-    "PTR record ${PTR_RECORD} created successfully." \
-    "Failed to create PTR record ${PTR_RECORD} in reverse zone ${REVERSE_ZONE}" \
-    samba-tool dns add 127.0.0.1 "${REVERSE_ZONE}" "${PTR_RECORD}" PTR "${CONTAINER_HOSTNAME}.${DNS_DOMAIN}" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}"
+    "PTR record ${ptr_record} created successfully." \
+    "Failed to create PTR record ${ptr_record} in reverse zone ${REVERSE_ZONE}" \
+    samba-tool dns add 127.0.0.1 "${REVERSE_ZONE}" "${ptr_record}" PTR "${CONTAINER_HOSTNAME}.${DNS_DOMAIN}" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}"
 
-NETBIOS_NAME=$(testparm -s --parameter-name="netbios name" 2>/dev/null)
+netbios_name=$(testparm -s --parameter-name="netbios name" 2>/dev/null)
 if [ ${#CONTAINER_HOSTNAME} -gt 15 ]; then
     run_and_log \
-        "Adding CNAME record ${CONTAINER_HOSTNAME} for ${NETBIOS_NAME}.${DNS_DOMAIN} in zone ${DNS_DOMAIN}" \
+        "Adding CNAME record ${CONTAINER_HOSTNAME} for ${netbios_name}.${DNS_DOMAIN} in zone ${DNS_DOMAIN}" \
         "samba-tool CNAME" \
         "CNAME record ${CONTAINER_HOSTNAME} created successfully." \
-        "Failed to create CNAME record ${CONTAINER_HOSTNAME} for ${NETBIOS_NAME}.${DNS_DOMAIN} in zone ${DNS_DOMAIN}" \
-        samba-tool dns add 127.0.0.1 "${DNS_DOMAIN}" "${CONTAINER_HOSTNAME}" CNAME "${NETBIOS_NAME}.${DNS_DOMAIN}" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}"
+        "Failed to create CNAME record ${CONTAINER_HOSTNAME} for ${netbios_name}.${DNS_DOMAIN} in zone ${DNS_DOMAIN}" \
+        samba-tool dns add 127.0.0.1 "${DNS_DOMAIN}" "${CONTAINER_HOSTNAME}" CNAME "${netbios_name}.${DNS_DOMAIN}" -U Administrator%"${DIB_DOMAIN_ADMIN_PASSWORD}"
 fi
 
 run_and_log \
@@ -175,14 +175,29 @@ run_and_log \
 
 chown root:_kea /run/kea/keaddns.ccache
 chmod 660 /run/kea/keaddns.ccache
-CRON_LINE="0 */4 * * * KRB5CCNAME=FILE:/run/kea/keaddns.ccache /usr/bin/kinit -kt /var/lib/kea/keaddns.keytab keaddns@${DIB_REALM}"
+cron_line="0 */4 * * * KRB5CCNAME=FILE:/run/kea/keaddns.ccache /usr/bin/kinit -kt /var/lib/kea/keaddns.keytab keaddns@${DIB_REALM}"
 
 run_and_log \
     "Creating cron job for Kerberos cache renewal" \
     "crontab" \
     "Cron job for Kerberos cache renewal created successfully." \
     "Failed to create cron job for Kerberos cache renewal" \
-    sh -c "(crontab -u _kea -l 2>/dev/null; echo \"$CRON_LINE\") | crontab -u _kea -"
+    sh -c "(crontab -u _kea -l 2>/dev/null; echo \"$cron_line\") | crontab -u _kea -"
+
+ldap_password=$(sed -n 's/^STORK_SERVER_HOOK_LDAP_BIND_PASSWORD=\(.*\)/\1/p' /etc/stork/server.env)
+run_and_log \
+    "Creating user account for ldap-search-user" \
+    "samba-tool user" \
+    "User account created successfully." \
+    "Failed to create user account for ldap-search-user" \
+    samba-tool user create ldap-search-user --description="Read-only LDAP Bind User" "${ldap_password}"
+
+run_and_log \
+    "Setting expiry for ldap-search-user" \
+    "samba-tool user setexpiry" \
+    "User account expiry set successfully." \
+    "Failed to set expiry for ldap-search-user" \
+    samba-tool user setexpiry ldap-search-user --noexpiry
 
 dib_init_stork_agent
 
