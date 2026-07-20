@@ -46,8 +46,8 @@ ${stork_tls_block}
 
 STORK_SERVER_HOOK_LDAP_URL=ldaps://${CONTAINER_HOSTNAME}.${DNS_DOMAIN}:636
 STORK_SERVER_HOOK_LDAP_SKIP_SERVER_TLS_VERIFICATION=${ldap_skip_tls_verification}
-STORK_SERVER_HOOK_LDAP_BIND_USERDN=CN=Administrator,CN=Users,${ldap_root}
-STORK_SERVER_HOOK_LDAP_BIND_PASSWORD=${DIB_DOMAIN_ADMIN_PASSWORD}
+STORK_SERVER_HOOK_LDAP_BIND_USERDN=CN=ldap-search-user,CN=Users,${ldap_root}
+STORK_SERVER_HOOK_LDAP_BIND_PASSWORD=$(openssl rand -base64 18)
 STORK_SERVER_HOOK_LDAP_ROOT=${ldap_root}
 STORK_SERVER_HOOK_LDAP_MAP_GROUPS=true
 STORK_SERVER_HOOK_LDAP_GROUP_ADMIN=Domain Admins
@@ -81,8 +81,8 @@ dib_init_stork_agent() {
 
     role_exists=$(su -s /bin/sh -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='stork'\" postgres" postgres | tr -d '[:space:]')
     if [ "${role_exists}" != "1" ]; then
-        DIB_STORK_DB_PASSWORD=$(sed -n 's/^[[:space:]]*STORK_DATABASE_PASSWORD[[:space:]]*=[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}[[:space:]]*$/\1/p' /etc/stork/server.env)
-        pass_escaped=$(printf "%s" "${DIB_STORK_DB_PASSWORD}" | sed "s/'/''/g")
+        stork_db_password=$(sed -n 's/^[[:space:]]*STORK_DATABASE_PASSWORD[[:space:]]*=[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}[[:space:]]*$/\1/p' /etc/stork/server.env)
+        pass_escaped=$(printf "%s" "${stork_db_password}" | sed "s/'/''/g")
         su -s /bin/sh -c "psql -v ON_ERROR_STOP=1 -c \"CREATE ROLE \\\"stork\\\" LOGIN PASSWORD '${pass_escaped}'\" postgres" postgres
     fi
 
