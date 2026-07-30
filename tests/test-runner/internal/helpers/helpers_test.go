@@ -8,8 +8,8 @@ import (
 )
 
 func TestConvertDomainToLDAP(t *testing.T) {
-	got := ConvertDomainToLDAP("home.arpa")
-	want := "dc=home,dc=arpa"
+	got := ConvertDomainToLDAP("domain.home.arpa")
+	want := "dc=domain,dc=home,dc=arpa"
 	if got != want {
 		t.Fatalf("ConvertDomainToLDAP() = %q, want %q", got, want)
 	}

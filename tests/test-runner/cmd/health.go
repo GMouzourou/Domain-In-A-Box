@@ -35,6 +35,18 @@ func runHealth(cmd *cobra.Command, args []string) error {
 		{Name: "DHCP service (port 67)", Run: func() error {
 			return network.CheckUDPPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "67", "6767"), 5*time.Second)
 		}},
+		{Name: "Stork REST service (port 80)", Run: func() error {
+			return network.CheckPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "80", "80"), 5*time.Second)
+		}},
+		{Name: "Samba Prometheus endpoint (port 9922)", Run: func() error {
+			return network.CheckPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "9922", "9922"), 5*time.Second)
+		}},
+		{Name: "Bind metrics endpoint (port 9119)", Run: func() error {
+			return network.CheckPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "9119", "9119"), 5*time.Second)
+		}},
+		{Name: "Kea metrics endpoint (port 9547)", Run: func() error {
+			return network.CheckPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "9547", "9547"), 5*time.Second)
+		}},
 	}
 
 	passed, total := helpers.RunChecks("Health Check Results", checks, cfg.Verbose)

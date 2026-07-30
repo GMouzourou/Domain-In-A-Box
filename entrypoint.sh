@@ -7,55 +7,35 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # Load service-specific helpers to keep the main entrypoint readable.
-. "/entrypoint.d/bind.sh"
-. "/entrypoint.d/kea.sh"
 . "/entrypoint.d/chrony.sh"
+. "/entrypoint.d/samba.sh"
+. "/entrypoint.d/bind.sh"
 . "/entrypoint.d/postgres.sh"
+. "/entrypoint.d/kea.sh"
 . "/entrypoint.d/stork.sh"
 
 # Process variables
 : "${DIB_REALM:?Environment variable DIB_REALM is not set}"
+: "${DIB_DOMAIN:?Environment variable DIB_DOMAIN is not set}"
+: "${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:=false}"
 : "${DIB_INTERFACE:?Environment variable DIB_INTERFACE is not set}"
+: "${DIB_DHCP_POOL:?Environment variable DIB_DHCP_POOL is not set}"
+: "${DIB_DNS_FORWARDERS:?Environment variable DIB_DNS_FORWARDERS is not set}"
+: "${DIB_SAMBA_METRICS_PORT:=9922}"
 
 DIB_REALM=$(echo "${DIB_REALM}" | tr '[:lower:]' '[:upper:]')
-DNS_DOMAIN=$(echo "${DIB_REALM}" | tr '[:upper:]' '[:lower:]')
+[ ${#DIB_DOMAIN} -gt 15 ] && : "${DIB_DOMAIN:?is longer than 15 characters}"
+[ "${DIB_SAMBA_METRICS_ENABLED}" = "true" ] && DIB_SAMBA_METRICS_ENABLED=on || DIB_SAMBA_METRICS_ENABLED=off
+
 CONTAINER_HOSTNAME=$(hostname | tr '[:upper:]' '[:lower:]')
+[ ${#CONTAINER_HOSTNAME} -gt 15 ] && : "${CONTAINER_HOSTNAME:?is longer than 15 characters}"
+DNS_DOMAIN=$(echo "${DIB_REALM}" | tr '[:upper:]' '[:lower:]')
 SUBNET=$(ip route show dev "${DIB_INTERFACE}" | awk '/ link / {print $1; exit}')
 REVERSE_ZONE=$(echo "${SUBNET}" | cut -d/ -f1 | awk -F. '{print $3"."$2"."$1".in-addr.arpa"}')
 IP=$(ip addr show dev "${DIB_INTERFACE}" | awk '/inet / { split($2, a, "/"); print a[1]; exit }')
 GATEWAY=$(ip route show dev "${DIB_INTERFACE}" | awk '/via/ {print $3; exit}')
 INIT_DOMAIN=FALSE
 PROVISION_SENTINEL=/var/lib/samba/.dib-provisioned
-
-dib_apply_external_samba_tls_assets() {
-    cert_file=/certs/cert.pem
-    key_file=/certs/key.pem
-    ca_file=/certs/ca.pem
-
-    if [ ! -e "$cert_file" ] && [ ! -e "$key_file" ] && [ ! -e "$ca_file" ]; then
-        return 0
-    fi
-
-    if [ ! -e "$cert_file" ] || [ ! -e "$key_file" ] || [ ! -e "$ca_file" ]; then
-        echo "Custom TLS is enabled by fixed paths. Provide /certs/cert.pem, /certs/key.pem and /certs/ca.pem together." >&2
-        exit 1
-    fi
-
-    if [ ! -s "$cert_file" ] || [ ! -s "$key_file" ] || [ ! -s "$ca_file" ]; then
-        echo "One or more custom Samba TLS files do not exist or are empty." >&2
-        exit 1
-    fi
-
-    echo "Installing custom Samba TLS assets..."
-    install -d -m 0755 /var/lib/samba/private/tls
-    install -m 0644 "$cert_file" /var/lib/samba/private/tls/cert.pem
-    install -m 0600 "$key_file" /var/lib/samba/private/tls/key.pem
-    install -m 0644 "$ca_file" /var/lib/samba/private/tls/ca.pem
-    chown root:root /var/lib/samba/private/tls/cert.pem /var/lib/samba/private/tls/key.pem /var/lib/samba/private/tls/ca.pem
-
-    install -m 0644 "$ca_file" /usr/local/share/ca-certificates/domain-in-a-box-ldap-ca.crt
-    update-ca-certificates >/dev/null 2>&1 || true
-}
 
 if [ -z "${IP}" ]; then
     echo "Failed to determine an IPv4 address for DIB_INTERFACE=${DIB_INTERFACE}. Check that the interface exists and is configured." >&2
@@ -85,9 +65,6 @@ ${new_line}
 wq
 EOF
 
-: "${DIB_DHCP_POOL:?Environment variable DIB_DHCP_POOL is not set}"
-: "${DIB_DNS_FORWARDERS:?Environment variable DIB_DNS_FORWARDERS is not set}"
-
 # Keep Samba config and state on the same persistent volume without using subPath.
 mkdir -p /var/lib/samba/etc-samba
 if [ ! -L /etc/samba ]; then
@@ -103,12 +80,6 @@ fi
 if [ ! -f "${PROVISION_SENTINEL}" ]; then
     echo "Running first time setup..."
 
-    # Process variables
-    : "${DIB_DOMAIN:?Environment variable DIB_DOMAIN is not set}"
-    : "${DIB_DOMAIN_ADMIN_PASSWORD:?Environment variable DIB_DOMAIN_ADMIN_PASSWORD is not set}"
-
-    DIB_DOMAIN=$(echo "${DIB_DOMAIN}" | tr '[:lower:]' '[:upper:]')
-
     # Create necessary log directories and files
     mkdir -p /var/log/kea /var/log/samba/cores
     touch /var/log/kea/kea-dhcp4.log
@@ -116,50 +87,27 @@ if [ ! -f "${PROVISION_SENTINEL}" ]; then
     chmod -R 664 /var/log/kea
     chmod 700 /var/log/samba/cores
 
-    # Configure Samba
-    echo "Provisioning Samba domain..."
-    samba-tool domain provision --realm="${DIB_REALM}" --domain="${DIB_DOMAIN}" --server-role=dc --use-rfc2307 --dns-backend=SAMBA_INTERNAL \
-        --adminpass="${DIB_DOMAIN_ADMIN_PASSWORD}" --host-name="${CONTAINER_HOSTNAME}" --host-ip="${IP}" \
-        --option "bind interfaces only = yes" --option "interfaces = lo ${DIB_INTERFACE}" --option "dns forwarder = ${IP}:5353" \
-        --option "rpc server dynamic port range = 49152-49252" --option "ntp signd socket directory = /var/lib/samba/ntp_signd" \
-        --option "ad dc functional level = 2016" --option "log file = /var/log/samba/%m.log" --option "max log size = 10000"
+    dib_provision_samba_domain
 
     touch "${PROVISION_SENTINEL}"
     INIT_DOMAIN=TRUE
-else
-    DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART="${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
-
-    if [ "${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART}" = "true" ]; then
-        if [ -z "${DIB_DOMAIN_ADMIN_PASSWORD}" ]; then
-            echo "Failed to update Administrator password from latest configuration: DIB_DOMAIN_ADMIN_PASSWORD is not set or is empty"
-        else
-            echo "Updating Administrator password from latest configuration..."
-            samba-tool user setpassword Administrator --newpassword="${DIB_DOMAIN_ADMIN_PASSWORD}" >/dev/null  
-        fi
-    fi
 fi
 
-dib_apply_external_samba_tls_assets
-
 # Ensure required config files exist without overwriting user-managed customizations.
-dib_configure_bind9
-dib_configure_kea
 dib_configure_chrony
+dib_configure_samba
+dib_configure_bind9
 dib_configure_postgresql
+dib_configure_kea
 dib_configure_stork
 
 if [ "$INIT_DOMAIN" = "FALSE" ]; then
     echo "Updating DHCP pool and DNS forwarders from latest configuration..."
+    dib_update_samba_admin_password
+    dib_update_samba_metrics
     dib_update_bind_forwarders
     dib_update_kea_dhcp_pool
 fi
-
-# Configure Kerberos
-echo "Setting Kerberos configuration..."
-cp /var/lib/samba/private/krb5.conf /etc/krb5.conf
-sed -i 's/^[[:space:]]*dns_lookup_kdc[[:space:]]*=[[:space:]]*true/ \tdns_lookup_kdc = false/' /etc/krb5.conf
-sed -i "/^${DIB_REALM}[[:space:]]*=/a\\\\tkdc = ${IP}\n\\tadmin_server = ${IP}" /etc/krb5.conf
-chown root:bind /etc/krb5.conf
 
 export INIT_DOMAIN
 export DNS_DOMAIN
@@ -169,23 +117,23 @@ export SUBNET
 export REVERSE_ZONE
 
 validate_service_configs() {
+    echo "Validating Chrony config..."
+    chronyd -p -f /etc/chrony/chrony.conf >/dev/null
+
     echo "Validating Samba config..."
     testparm -s >/dev/null
 
     echo "Validating BIND config..."
     named-checkconf /etc/bind/named.conf
 
+    echo "Validating PostgreSQL cluster configuration..."
+    dib_validate_postgresql_cluster
+
     echo "Validating Kea DHCP4 config..."
     /usr/sbin/kea-dhcp4 -t /etc/kea/kea-dhcp4.conf >/dev/null
 
     echo "Validating Kea DHCP-DDNS config..."
     /usr/sbin/kea-dhcp-ddns -t /etc/kea/kea-dhcp-ddns.conf >/dev/null
-
-    echo "Validating Chrony config..."
-    chronyd -p -f /etc/chrony/chrony.conf >/dev/null
-
-    echo "Validating PostgreSQL cluster configuration..."
-    dib_validate_postgresql_cluster
 
     echo "Validating Stork environment files..."
     dib_validate_stork_configs

@@ -37,13 +37,15 @@ services:
       - "13268:3268"
       - "13269:3269"
     environment:
-      DIB_REALM: "HOME.ARPA"
-      DIB_DOMAIN: "HOME"
+      DIB_REALM: "DOMAIN.HOME.ARPA"
+      DIB_DOMAIN: "DOMAIN"
       DIB_DOMAIN_ADMIN_PASSWORD: "P@ssw0rd"
       DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART: "false"
       DIB_INTERFACE: "eth0"
       DIB_DHCP_POOL: "192.168.2.100-192.168.2.199"
       DIB_DNS_FORWARDERS: "1.1.1.1; 8.8.8.8;"
+      DIB_SAMBA_METRICS_ENABLED: "true"
+      DIB_SAMBA_METRICS_PORT: "9922"
     volumes:
       - bind-config:/etc/bind
       - bind-data:/var/cache/bind
@@ -78,13 +80,13 @@ services:
       - domain_net
     environment:
       DOMAIN_CONTROLLER_IP: "192.168.2.1"
-      DIB_DOMAIN: "HOME"
-      DIB_REALM: "HOME.ARPA"
-      DOMAIN_FQDN: "home.arpa"
+      DIB_DOMAIN: "DOMAIN"
+      DIB_REALM: "DOMAIN.HOME.ARPA"
+      DOMAIN_FQDN: "domain.home.arpa"
       ADMIN_USER: "Administrator"
       ADMIN_PASSWORD: "P@ssw0rd"
       SERVER_HOSTNAME: "domain-controller"
-      DNS_DOMAIN: "home.arpa"
+      DNS_DOMAIN: "domain.home.arpa"
       ENABLE_DHCP_CLIENT: "false"
       DIB_DHCP_POOL: "192.168.2.100-192.168.2.199"
       SUBNET: "192.168.2.0/24"
