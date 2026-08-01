@@ -95,11 +95,11 @@ if [ "$INIT_DOMAIN" = "FALSE" ]; then
 fi
 
 : "${DNS_DOMAIN:?Environment variable DNS_DOMAIN is not set}"
+: "${DIB_DOMAIN_ADMIN_PASSWORD:?Environment variable DIB_DOMAIN_ADMIN_PASSWORD is not set}"
 : "${CONTAINER_HOSTNAME:?Environment variable CONTAINER_HOSTNAME is not set}"
 : "${IP:?Environment variable IP is not set}"
 : "${SUBNET:?Environment variable SUBNET is not set}"
 : "${REVERSE_ZONE:?Environment variable REVERSE_ZONE is not set}"
-: "${DIB_DOMAIN_ADMIN_PASSWORD:?Environment variable DIB_DOMAIN_ADMIN_PASSWORD is not set}"
 
 run_and_log \
     "Raising Samba domain and forest levels..." \

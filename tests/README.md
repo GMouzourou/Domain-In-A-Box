@@ -21,7 +21,7 @@ The Go runner under `test-runner/` exposes the following suites:
 
 | Suite | Purpose |
 | --- | --- |
-| `health` | Confirms DNS, LDAP, Kerberos, SMB, and DHCP ports are reachable |
+| `health` | Confirms DNS, LDAP, Kerberos, SMB, DHCP, Stork REST, BIND metrics, and Samba Prometheus endpoint ports are reachable |
 | `dns` | Validates A, SRV, and PTR lookups |
 | `dhcp` | Checks DHCP reachability and DNS accessibility |
 | `ad` | Verifies LDAP and AD object queries |
@@ -78,10 +78,10 @@ docker exec -it domain-in-a-box-test-client bash
 ### Useful manual checks inside the client
 
 ```bash
-realm discover HOME.ARPA
+realm discover DOMAIN.HOME.ARPA
 realm list
-getent passwd administrator@home.arpa
-kinit Administrator@HOME.ARPA
+getent passwd administrator@domain.home.arpa
+kinit Administrator@DOMAIN.HOME.ARPA
 ```
 
 ---

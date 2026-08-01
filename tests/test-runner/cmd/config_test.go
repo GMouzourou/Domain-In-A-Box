@@ -4,11 +4,11 @@ import "testing"
 
 func TestEnvOrDefaultUsesFirstNonEmptyValue(t *testing.T) {
 	t.Setenv("EMPTY_ENV", "   ")
-	t.Setenv("REAL_VALUE", "home.arpa")
+	t.Setenv("REAL_VALUE", "domain.home.arpa")
 
 	got := envOrDefault("fallback", "EMPTY_ENV", "REAL_VALUE")
-	if got != "home.arpa" {
-		t.Fatalf("envOrDefault() = %q, want %q", got, "home.arpa")
+	if got != "domain.home.arpa" {
+		t.Fatalf("envOrDefault() = %q, want %q", got, "domain.home.arpa")
 	}
 }
 

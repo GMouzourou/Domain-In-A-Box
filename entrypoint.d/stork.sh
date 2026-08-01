@@ -12,6 +12,7 @@ dib_configure_stork() {
 
     if [ ! -f /etc/stork/server.env ]; then
         echo "Writing /etc/stork/server.env..."
+        DIB_LDAP_PASSWORD="${DIB_LDAP_PASSWORD:-(openssl rand -base64 18)}"
         ldap_root=$(printf '%s' "${DNS_DOMAIN}" | awk -F. '{for (i=1; i<=NF; i++) { printf "%sDC=%s", (i==1 ? "" : ","), $i }}')
         db_password=$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
         ldap_skip_tls_verification=true
@@ -40,14 +41,14 @@ STORK_DATABASE_NAME=stork
 STORK_DATABASE_USER_NAME=stork
 STORK_DATABASE_PASSWORD=${db_password}
 
-STORK_REST_HOST=0.0.0.0
+STORK_REST_HOST=${IP}
 STORK_REST_PORT=${stork_rest_port}
 ${stork_tls_block}
 
 STORK_SERVER_HOOK_LDAP_URL=ldaps://${CONTAINER_HOSTNAME}.${DNS_DOMAIN}:636
 STORK_SERVER_HOOK_LDAP_SKIP_SERVER_TLS_VERIFICATION=${ldap_skip_tls_verification}
 STORK_SERVER_HOOK_LDAP_BIND_USERDN=CN=ldap-search-user,CN=Users,${ldap_root}
-STORK_SERVER_HOOK_LDAP_BIND_PASSWORD=$(openssl rand -base64 18)
+STORK_SERVER_HOOK_LDAP_BIND_PASSWORD=${DIB_LDAP_PASSWORD}
 STORK_SERVER_HOOK_LDAP_ROOT=${ldap_root}
 STORK_SERVER_HOOK_LDAP_MAP_GROUPS=true
 STORK_SERVER_HOOK_LDAP_GROUP_ADMIN=Domain Admins
@@ -62,7 +63,7 @@ EOF
     if [ ! -f /etc/stork/agent.env ]; then
         echo "Configuring /etc/stork/agent.env..."
         tee /etc/stork/agent.env >/dev/null <<EOF
-STORK_AGENT_HOST=127.0.0.1
+STORK_AGENT_HOST=${IP}
 STORK_AGENT_PORT=8081
 EOF
     fi
@@ -77,8 +78,6 @@ EOF
 }
 
 dib_init_stork_agent() {
-    : "${DIB_REALM:?Environment variable DIB_REALM is not set}"
-
     role_exists=$(su -s /bin/sh -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='stork'\" postgres" postgres | tr -d '[:space:]')
     if [ "${role_exists}" != "1" ]; then
         stork_db_password=$(sed -n 's/^[[:space:]]*STORK_DATABASE_PASSWORD[[:space:]]*=[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}[[:space:]]*$/\1/p' /etc/stork/server.env)
@@ -109,7 +108,7 @@ dib_init_stork_agent() {
     fi
 
     echo "Waiting for Stork server on port ${stork_server_port}..."
-    while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('127.0.0.1', ${stork_server_port})))" 2>/dev/null; do
+    while ! python3 -c "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('${IP}', ${stork_server_port})))" 2>/dev/null; do
         sleep 1
     done
     
@@ -119,7 +118,7 @@ dib_init_stork_agent() {
     stork-agent register \
         --server-url="${stork_server_scheme}://${CONTAINER_HOSTNAME}.${DNS_DOMAIN}:${stork_server_port}" \
         --server-token="${server_token}" \
-        --agent-host=127.0.0.1 \
+        --agent-host="${IP}" \
         --agent-port=8081 \
         --non-interactive
 

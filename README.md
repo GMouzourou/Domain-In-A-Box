@@ -130,7 +130,7 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
 - **Interface naming:** The example sets `DIB_INTERFACE=net1`, which is the common Multus secondary interface name. If your CNI names it differently, update that value.
 - **Privileged workload:** The container is intentionally privileged because Samba AD DC, BIND, and Kea need low-level networking access.
 - **Persistent storage:** The sample assumes a `ReadWriteOnce` storage class. Add `storageClassName` if your cluster does not provide a suitable default.
-- **Firewalling and service reachability:** When clients use the Multus/macvlan IP directly, allow the AD/DC ports on your network path: `53/tcp+udp`, `67/udp`, `68/udp`, `88/tcp+udp`, `123/udp`, `135/tcp`, `137/udp`, `138/udp`, `139/tcp`, `389/tcp+udp`, `445/tcp`, `464/tcp+udp`, `636/tcp`, `3268/tcp`, `3269/tcp`, and the fixed Samba RPC range `49152-49252/tcp`.
+- **Firewalling and service reachability:** When clients use the Multus/macvlan IP directly, allow the AD/DC ports on your network path: `53/tcp+udp`, `67/udp`, `68/udp`, `80/tcp`, `88/tcp+udp`, `123/udp`, `135/tcp`, `137/udp`, `138/udp`, `139/tcp`, `389/tcp+udp`, `443/tcp`, `445/tcp`, `464/tcp+udp`, `636/tcp`, `9119/tcp`, `9547/tcp`, `9922/tcp`, `3268/tcp`, `3269/tcp`, and the fixed Samba RPC range `49152-49252/tcp`.
 
 ### Step-by-Step Instructions
 
@@ -186,7 +186,7 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
    ```
 
    **What to Customize:**  
-   - **Environment Variables:** Adjust the `DIB_REALM`, `DIB_DOMAIN`, `DIB_INTERFACE`, and other environment variables to suit your environment. `DIB_DOMAIN_ADMIN_PASSWORD` is referenced from the `domain-in-a-box-secret` Secret, and `DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART` should normally remain `false`.
+  - **Environment Variables:** Adjust the `DIB_REALM`, `DIB_DOMAIN`, `DIB_INTERFACE`, and other environment variables to suit your environment. `DIB_DOMAIN_ADMIN_PASSWORD` is referenced from the `domain-in-a-box-secret` Secret, and `DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART` should normally remain `false`. Metrics-related knobs are `DIB_SAMBA_METRICS_ENABLED` and `DIB_SAMBA_METRICS_PORT` (default `9922`).
    - **Multus/macvlan settings:** Update `master`, the static IP, the gateway, and the `routes` entry to match your LAN. This is especially important when the cluster keeps its default route on a different interface.
    - **Persistent Storage:** The sample starter values are `32Mi`-scale config PVCs, `1Gi` for `samba-data`, and `2Gi` for logs. Increase the `storage` values and set `storageClassName` as needed for your environment.
    - **Resources:** For a small lab cluster, a reasonable starting point is `500m` CPU / `1Gi` memory requested and up to `2` CPU / `4Gi` memory limited.
@@ -232,13 +232,15 @@ The `docker-compose.yml` file includes several settings that you might want to a
   *Change this value if your network plan requires a different IP for the domain controller.*
 
 - **Environment Variables:**  
-  - **DIB_REALM:** Specify your Active Directory Kerberos realm (e.g., `"HOME.ARPA"`).
-  - **DIB_DOMAIN:** Define your short domain name (e.g., `"HOME"`).
+  - **DIB_REALM:** Specify your Active Directory Kerberos realm (e.g., `"DOMAIN.HOME.ARPA"`).
+  - **DIB_DOMAIN:** Define your short domain name (e.g., `"DOMAIN"`).
   - **DIB_DOMAIN_ADMIN_PASSWORD:** Set the domain administrator password used during provisioning.
   - **DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:** Set to `true` only if you want container restarts to re-sync the Administrator password from the environment.
   - **DIB_INTERFACE:** Specify the interface to be used by your domain controller (e.g., `"eth0"`).
   - **DIB_DHCP_POOL:** Specify the range of IP addresses to be leased (e.g., `"192.168.1.100-192.168.1.199"`); updates are applied on restart.
   - **DIB_DNS_FORWARDERS:** List upstream DNS servers (separated by semicolons); updates are applied on restart.
+  - **DIB_SAMBA_METRICS_ENABLED:** Enables `smb_prometheus_endpoint` (default `true`).
+  - **DIB_SAMBA_METRICS_PORT:** Samba Prometheus exporter port (default `9922`).
 
 - **Persistent Volumes:**  
   The following named volumes are used to persist configuration and data:
@@ -260,7 +262,7 @@ The `docker-compose.yml` file includes several settings that you might want to a
   - **subnet & gateway:** These are set according to your local network. Adjust the `subnet` (e.g., `"192.168.1.0/24"`) and `gateway` (e.g., `"192.168.1.254"`) as needed.
 
 - **Ports and Firewalling:**  
-  Because the container appears directly on the LAN through macvlan, the Compose example does not publish host ports with a `ports:` block. Ensure that your LAN/firewall policy allows the required AD/DC traffic, including `123/udp` for NTP and the fixed Samba RPC range `49152-49252/tcp`.
+  Because the container appears directly on the LAN through macvlan, the Compose example does not publish host ports with a `ports:` block. Ensure that your LAN/firewall policy allows the required AD/DC traffic, including `123/udp` for NTP, `9119/tcp` for BIND metrics, `9547/tcp` for Kea metrics, `9922/tcp` for Samba Prometheus metrics, and the fixed Samba RPC range `49152-49252/tcp`.
 
 ### Step-by-Step Deployment
 
@@ -310,13 +312,15 @@ services:
       domain_net:
         ipv4_address: 192.168.1.1  # Change if needed to match your network plan
     environment:
-      DIB_REALM: "${DIB_REALM:-HOME.ARPA}"
-      DIB_DOMAIN: "${DIB_DOMAIN:-HOME}"
+      DIB_REALM: "${DIB_REALM:-DOMAIN.HOME.ARPA}"
+      DIB_DOMAIN: "${DIB_DOMAIN:-DOMAIN}"
       DIB_DOMAIN_ADMIN_PASSWORD: "${DIB_DOMAIN_ADMIN_PASSWORD:-ChangeMeNow123!}"
       DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART: "${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
       DIB_INTERFACE: "${DIB_INTERFACE:-eth0}"
       DIB_DHCP_POOL: "${DIB_DHCP_POOL:-192.168.1.100-192.168.1.199}"
       DIB_DNS_FORWARDERS: "${DIB_DNS_FORWARDERS:-1.1.1.1; 8.8.8.8;}"
+      DIB_SAMBA_METRICS_ENABLED: "${DIB_SAMBA_METRICS_ENABLED:-true}"
+      DIB_SAMBA_METRICS_PORT: "${DIB_SAMBA_METRICS_PORT:-9922}"
     volumes:
       - bind-config:/etc/bind
       - bind-data:/var/cache/bind
@@ -393,13 +397,15 @@ docker run -d \
   --network domain_net \
   --hostname domain-server \
   --ip 192.168.1.1 \
-  -e DIB_REALM="HOME.ARPA" \
-  -e DIB_DOMAIN="HOME" \
+  -e DIB_REALM="DOMAIN.HOME.ARPA" \
+  -e DIB_DOMAIN="DOMAIN" \
   -e DIB_DOMAIN_ADMIN_PASSWORD="${DIB_DOMAIN_ADMIN_PASSWORD}" \
   -e DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART="false" \
   -e DIB_INTERFACE="eth0" \
   -e DIB_DHCP_POOL="192.168.1.100-192.168.1.199" \
   -e DIB_DNS_FORWARDERS="1.1.1.1; 8.8.8.8;" \
+  -e DIB_SAMBA_METRICS_ENABLED="true" \
+  -e DIB_SAMBA_METRICS_PORT="9922" \
   -v bind-config:/etc/bind \
   -v bind-data:/var/cache/bind \
   -v chrony-config:/etc/chrony \
@@ -419,7 +425,7 @@ docker run -d \
 - **`--name domain-in-a-box`**: Assigns a custom name to the container.
 - **`--privileged`**: Grants the container elevated privileges for necessary low-level operations.
 - **`--network domain_net` & `--ip 192.168.1.1`**: Connects the container to the custom macvlan network and assigns it a static IP address.
-- **Environment Variables (`-e`)**: Passes configuration values such as the Kerberos realm, domain details, DHCP pool, and DNS forwarders.
+- **Environment Variables (`-e`)**: Passes configuration values such as the Kerberos realm, domain details, DHCP pool, DNS forwarders, and metrics endpoint settings.
 - **Volume Mounts (`-v`)**: Ensures persistent data storage by mounting named volumes to directories inside the container.
 
 #### 3. Verify and Manage the Deployment
@@ -467,4 +473,11 @@ docker run -d \
   Running the container in privileged mode and assigning a static IP on your host network may introduce security risks. Ensure that your host is secure and that only trusted users have access.
 
 - **Environment-Specific Adjustments:**  
-  Customize environment variables and network settings to match your production environment. In particular, ensure that your LAN and any upstream firewall permit the standard AD/DC ports plus `123/udp` for Chrony and the fixed Samba RPC range `49152-49252/tcp`.
+  Customize environment variables and network settings to match your production environment. In particular, ensure that your LAN and any upstream firewall permit the standard AD/DC ports plus `123/udp` for Chrony, `9119/tcp` for BIND metrics, `9547/tcp` for Kea metrics, `9922/tcp` for Samba Prometheus metrics, and the fixed Samba RPC range `49152-49252/tcp`.
+
+### Metrics Endpoint Notes
+
+- **Samba AD DC:** `smb_prometheus_endpoint` is enabled by default in this stack and exports SMB metrics from `smbprofile.tdb` on `DIB_SAMBA_METRICS_PORT` (default `9922`).
+- **BIND9:** A metrics endpoint is available on `9119`.
+- **Kea:** A metrics endpoint is available on `9547`.
+- **Stork UI:** Stork server is reachable on `80` (or `443` when custom TLS files are provided) and can provide Prometheus-format monitoring data through its built-in interfaces.

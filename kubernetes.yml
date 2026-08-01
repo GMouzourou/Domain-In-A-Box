@@ -52,7 +52,7 @@ metadata:
 spec:
   secretName: domain-in-a-box-tls
   dnsNames:
-    - domain-server-0.home.arpa
+    - domain-server-0.domain.home.arpa
     - domain-server-0
   issuerRef:
     name: CLUSTER_ISSUER_NAME # Replace with your ClusterIssuer name
@@ -92,6 +92,10 @@ spec:
       port: 68
       targetPort: 68
       protocol: UDP
+    - name: stork-srv-http
+      port: 80
+      targetPort: 80
+      protocol: TCP
     - name: kerberos-tcp
       port: 88
       targetPort: 88
@@ -128,6 +132,10 @@ spec:
       port: 389
       targetPort: 389
       protocol: UDP
+    - name: stork-srv-https
+      port: 443
+      targetPort: 443
+      protocol: TCP
     - name: smb
       port: 445
       targetPort: 445
@@ -160,9 +168,17 @@ spec:
       port: 5353
       targetPort: 5353
       protocol: UDP
-    - name: stork-server
-      port: 8080
-      targetPort: 8080
+    - name: bind-metrics
+      port: 9119
+      targetPort: 9119
+      protocol: TCP
+    - name: kea-metrics
+      port: 9547
+      targetPort: 9547
+      protocol: TCP
+    - name: samba-metrics
+      port: 9922
+      targetPort: 9922
       protocol: TCP
 ---
 apiVersion: policy/v1
@@ -214,9 +230,9 @@ spec:
               add: ["NET_ADMIN", "NET_RAW"]
           env:
             - name: DIB_REALM # Update with your Kerberos/AD realm.
-              value: "HOME.ARPA"
+              value: "DOMAIN.HOME.ARPA"
             - name: DIB_DOMAIN # Update with your short domain name.
-              value: "HOME"
+              value: "DOMAIN"
             - name: DIB_DOMAIN_ADMIN_PASSWORD # Set the initial domain administrator password via Secret.
               valueFrom:
                 secretKeyRef:
@@ -230,6 +246,10 @@ spec:
               value: "192.168.1.100-192.168.1.199"
             - name: DIB_DNS_FORWARDERS # Upstream DNS servers; adjust as needed.
               value: "1.1.1.1; 8.8.8.8;"
+            - name: DIB_SAMBA_METRICS_ENABLED # Enable Samba metrics.
+              value: "true"
+            - name: DIB_SAMBA_METRICS_PORT # Samba metrics port.
+              value: "9922"
           ports:
             - name: dns-tcp
               containerPort: 53
@@ -243,6 +263,9 @@ spec:
             - name: dhcp-client
               containerPort: 68
               protocol: UDP
+            - name: stork-srv-http
+              containerPort: 80
+              protocol: TCP
             - name: kerberos-tcp
               containerPort: 88
               protocol: TCP
@@ -270,6 +293,9 @@ spec:
             - name: cldap
               containerPort: 389
               protocol: UDP
+            - name: stork-srv-https
+              containerPort: 443
+              protocol: TCP
             - name: smb
               containerPort: 445
               protocol: TCP
@@ -294,8 +320,14 @@ spec:
             - name: alt-dns-udp
               containerPort: 5353
               protocol: UDP
-            - name: stork-server
-              containerPort: 8080
+            - name: bind-metrics
+              containerPort: 9119
+              protocol: TCP
+            - name: kea-metrics
+              containerPort: 9547
+              protocol: TCP
+            - name: samba-metrics
+              containerPort: 9922
               protocol: TCP
           # Kubernetes does not support declaring a port *range* here, so allow
           # `DIB_RPC_PORT_RANGE` (default `49152-49252/tcp`) in your firewall,
