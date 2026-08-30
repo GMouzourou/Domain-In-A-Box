@@ -58,7 +58,7 @@ services:
       - samba-data:/var/lib/samba
       - log-data:/var/log
     healthcheck:
-      test: ["CMD", "python3", "-c", "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('127.0.0.1', 389)))"]
+      test: ["CMD", "python3", "-c", "import socket, sys; ports = (389, 9119, 9547); sys.exit(any(socket.socket().connect_ex(('127.0.0.1', port)) for port in ports))"]
       interval: 10s
       timeout: 5s
       retries: 3

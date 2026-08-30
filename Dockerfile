@@ -1,3 +1,16 @@
+FROM golang:1.23 AS go-builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+RUN go build -o /out/dib-db-ctl ./cmd/dib-db-ctl && \
+    go build -o /out/dib-identity-core-ctl ./cmd/dib-identity-core-ctl && \
+    go build -o /out/dib-network-core-ctl ./cmd/dib-network-core-ctl && \
+    go build -o /out/dib-observability-ctl ./cmd/dib-observability-ctl && \
+    go build -o /out/dib-bootstrap-ctl ./cmd/dib-bootstrap-ctl
+
 FROM ubuntu:26.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -61,9 +74,13 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 COPY --from=builder /tmp/kea-Kea-3.0.3/build/src/hooks/d2/gss_tsig/libddns_gss_tsig.so /usr/lib/x86_64-linux-gnu/kea/hooks/libddns_gss_tsig.so
 COPY --from=builder /tmp/samba-v4-23-stable/source3/utils/smb_prometheus_endpoint /usr/bin/smb_prometheus_endpoint
+COPY --from=go-builder /out/dib-db-ctl /usr/local/bin/dib-db-ctl
+COPY --from=go-builder /out/dib-identity-core-ctl /usr/local/bin/dib-identity-core-ctl
+COPY --from=go-builder /out/dib-network-core-ctl /usr/local/bin/dib-network-core-ctl
+COPY --from=go-builder /out/dib-observability-ctl /usr/local/bin/dib-observability-ctl
+COPY --from=go-builder /out/dib-bootstrap-ctl /usr/local/bin/dib-bootstrap-ctl
 COPY supervisord.conf /etc/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
-COPY entrypoint.d/ /entrypoint.d/
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates wget gpg && \
@@ -104,7 +121,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/isc-stork.list "${keyring_location}" && \
     \
     mkdir -p /run/samba /run/named /run/kea /run/postgresql /etc/stork /var/log/kea /var/log/samba/cores && \
-    chmod -R 775 /entrypoint.sh /entrypoint.d /run/samba /run/named /run/postgresql /etc/stork && \
+    chmod -R 775 /entrypoint.sh /run/samba /run/named /run/postgresql /etc/stork && \
     chmod 750 /run/kea && \
     chmod 700 /var/log/samba/cores && \
     chown -R root:bind /run/named && \

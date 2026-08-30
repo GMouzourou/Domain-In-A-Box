@@ -76,7 +76,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: Lint shell scripts
-        run: shellcheck -x entrypoint.sh entrypoint.d/*.sh tests/linux-client/entrypoint.sh
+        run: shellcheck -x entrypoint.sh tests/linux-client/entrypoint.sh
 
       - name: Lint Dockerfiles
         run: |

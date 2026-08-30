@@ -114,7 +114,7 @@ lint: shellcheck hadolint docker-lint
 shellcheck:
 	@echo "Linting shell scripts..."
 	@if command -v shellcheck &> /dev/null; then \
-		shellcheck -x entrypoint.sh entrypoint.d/*.sh tests/linux-client/entrypoint.sh; \
+		shellcheck -x entrypoint.sh tests/linux-client/entrypoint.sh; \
 		echo "✓ Shell scripts checked"; \
 	else \
 		echo "⚠ shellcheck not available"; \
@@ -201,4 +201,4 @@ docker-prune:
 	docker system prune -f
 	@echo "✓ Docker resources pruned"
 
-.DEFAULT_GOAL := help
+
