@@ -25,7 +25,20 @@ func NewRunner() *Runner {
 
 func (r *Runner) Name() string { return "db" }
 
+func isExternalPostgres() bool {
+	if strings.EqualFold(os.Getenv("DIB_EMBEDDED_POSTGRES"), "false") {
+		return true
+	}
+	host := os.Getenv("STORK_DATABASE_HOST")
+	return host != "" && host != "127.0.0.1" && host != "localhost"
+}
+
 func (r *Runner) Configure(ctx context.Context) error {
+	if isExternalPostgres() {
+		r.log.Infof("external PostgreSQL configured; skipping local cluster configuration")
+		return nil
+	}
+
 	r.log.Infof("configuring PostgreSQL runtime directory")
 	if err := os.MkdirAll("/run/postgresql", 0o775); err != nil {
 		return fmt.Errorf("create PostgreSQL runtime directory: %w", err)
@@ -63,6 +76,9 @@ func (r *Runner) Bootstrap(context.Context) error {
 }
 
 func (r *Runner) Validate(ctx context.Context) error {
+	if isExternalPostgres() {
+		return nil
+	}
 	version, err := postgresVersion()
 	if err != nil {
 		return err
@@ -74,6 +90,11 @@ func (r *Runner) Validate(ctx context.Context) error {
 }
 
 func (r *Runner) Run(ctx context.Context) error {
+	if isExternalPostgres() {
+		r.log.Infof("external PostgreSQL configured; embedded postgresql daemon disabled")
+		<-ctx.Done()
+		return nil
+	}
 	version, err := postgresVersion()
 	if err != nil {
 		return err
@@ -87,6 +108,9 @@ func (r *Runner) Run(ctx context.Context) error {
 }
 
 func (r *Runner) Health(ctx context.Context) error {
+	if isExternalPostgres() {
+		return nil
+	}
 	return wait.Until(ctx, "PostgreSQL", 5, time.Second, func() error {
 		return run(ctx, "pg_isready", "-q", "-d", "postgres")
 	})

@@ -1,0 +1,29 @@
+{{- if and .Values.multus.enabled .Values.multus.createNAD }}
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: {{ .Values.multus.networkName }}
+  labels:
+    {{- include "domain-in-a-box.labels" . | nindent 4 }}
+spec:
+  config: |-
+    {
+      "cniVersion": "0.4.0",
+      "name": "{{ .Values.multus.networkName }}",
+      "type": "macvlan",
+      "master": "{{ .Values.multus.masterInterface }}",
+      "mode": "bridge",
+      "ipam": {
+        "type": "static",
+        "addresses": [
+          {
+            "address": "{{ .Values.multus.address }}",
+            "gateway": "{{ .Values.multus.gateway }}"
+          }
+        ],
+        "routes": [
+          { "dst": "{{ .Values.multus.address }}", "gw": "{{ .Values.multus.gateway }}" }
+        ]
+      }
+    }
+{{- end }}

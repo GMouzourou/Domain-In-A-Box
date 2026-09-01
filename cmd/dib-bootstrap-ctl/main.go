@@ -29,6 +29,15 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	pgHost := os.Getenv("STORK_DATABASE_HOST")
+	if pgHost == "" {
+		pgHost = "127.0.0.1"
+	}
+	pgPort := os.Getenv("STORK_DATABASE_PORT")
+	if pgPort == "" {
+		pgPort = "5432"
+	}
+
 	for _, dependency := range []struct {
 		name    string
 		address string
@@ -36,7 +45,7 @@ func run(ctx context.Context) error {
 		{name: "BIND", address: net.JoinHostPort(requiredEnv("IP"), "5353")},
 		{name: "Samba LDAP", address: "127.0.0.1:389"},
 		{name: "Samba KDC", address: "127.0.0.1:88"},
-		{name: "PostgreSQL", address: "127.0.0.1:5432"},
+		{name: "PostgreSQL", address: net.JoinHostPort(pgHost, pgPort)},
 	} {
 		logger.Infof("waiting for %s", dependency.name)
 		if err := waitForTCP(ctx, dependency.name, dependency.address, timeout); err != nil {

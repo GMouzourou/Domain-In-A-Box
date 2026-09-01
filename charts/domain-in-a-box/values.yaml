@@ -1,0 +1,68 @@
+# Default values for domain-in-a-box.
+
+coreImage:
+  repository: ghcr.io/gmouzourou/domain-in-a-box
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+storkImage:
+  repository: ghcr.io/gmouzourou/domain-in-a-box-stork
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+domain:
+  realm: "DOMAIN.HOME.ARPA"
+  name: "DOMAIN"
+  interface: "net1"
+  dhcpPool: "192.168.1.100-192.168.1.199"
+  dnsForwarders: "1.1.1.1; 8.8.8.8;"
+  syncPasswordOnRestart: false
+  # Initial domain admin password (used if secret is not provided)
+  initialAdminPassword: "ChangeMeNow123!"
+  adminPasswordSecret:
+    name: ""
+    key: "domain-admin-password"
+
+metrics:
+  enabled: true
+  port: 9922
+
+multus:
+  enabled: true
+  createNAD: true
+  networkName: "macvlan-network"
+  masterInterface: "eth0"
+  address: "192.168.1.1/24"
+  gateway: "192.168.1.254"
+
+database:
+  initialPassword: "storkpass123!"
+  initialLDAPPassword: "ChangeMeLDAP123!"
+  # Set external.enabled to true to connect Stork to an external PostgreSQL cluster (e.g. in RKE2)
+  external:
+    enabled: false
+    host: "postgresql.default.svc.cluster.local"
+    port: 5432
+    name: "stork"
+    user: "stork"
+    passwordSecret:
+      name: ""
+      key: "password"
+
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+  limits:
+    cpu: "2000m"
+    memory: "4Gi"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

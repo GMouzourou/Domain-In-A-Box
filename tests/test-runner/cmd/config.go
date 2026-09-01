@@ -18,6 +18,7 @@ const (
 
 type testConfig struct {
 	DomainControllerIP string
+	StorkServerIP      string
 	Realm              string
 	DNSDomain          string
 	AdminUser          string
@@ -47,6 +48,7 @@ func getTestConfig(cmd *cobra.Command) testConfig {
 	}
 	return testConfig{
 		DomainControllerIP: cmd.Flag("domain-controller").Value.String(),
+		StorkServerIP:      envOrDefault(cmd.Flag("domain-controller").Value.String(), "STORK_SERVER_IP", "TESTRUNNER_STORK_SERVER_IP"),
 		Realm:              cmd.Flag("realm").Value.String(),
 		DNSDomain:          cmd.Flag("dns-domain").Value.String(),
 		AdminUser:          cmd.Flag("admin-user").Value.String(),

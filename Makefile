@@ -1,4 +1,4 @@
-.PHONY: help build test test-unit test-dns test-dhcp test-ad test-ad-linux test-all test-verbose test-clean lint shellcheck hadolint docker-lint push push-docker push-ghcr dev-up dev-down dev-logs clean
+.PHONY: help build build-stork test test-unit test-dns test-dhcp test-ad test-ad-linux test-all test-verbose test-clean lint shellcheck hadolint docker-lint push push-docker push-ghcr dev-up dev-down dev-logs clean
 
 # Default target
 help:
@@ -51,14 +51,20 @@ help:
 # Image version
 VERSION ?= latest
 IMAGE_NAME ?= domain-in-a-box
+STORK_IMAGE_NAME ?= domain-in-a-box-stork
 REGISTRY ?= gmouzourou
 COMPOSE ?= docker compose
 
 # Build targets
 build:
 	@echo "Building Domain-In-A-Box image..."
-	docker build -t $(REGISTRY)/$(IMAGE_NAME):$(VERSION) .
+	docker build --target core -t $(REGISTRY)/$(IMAGE_NAME):$(VERSION) .
 	@echo "✓ Build complete: $(REGISTRY)/$(IMAGE_NAME):$(VERSION)"
+
+build-stork:
+	@echo "Building Domain-In-A-Box Stork image..."
+	docker build --target stork -t ghcr.io/$(REGISTRY)/$(STORK_IMAGE_NAME):$(VERSION) .
+	@echo "✓ Build complete: ghcr.io/$(REGISTRY)/$(STORK_IMAGE_NAME):$(VERSION)"
 
 build-test-client:
 	@echo "Building test client image..."
@@ -186,14 +192,16 @@ push-docker:
 	@echo "✓ Pushed to Docker Hub"
 
 push-ghcr:
-	@echo "Pushing to GitHub Container Registry..."
+	@echo "Pushing core and Stork images to GitHub Container Registry..."
 	@if [ -z "$(GITHUB_TOKEN)" ]; then \
 		echo "Error: GITHUB_TOKEN required"; \
 		exit 1; \
 	fi
 	docker tag $(REGISTRY)/$(IMAGE_NAME):$(VERSION) ghcr.io/$(REGISTRY)/$(IMAGE_NAME):$(VERSION)
 	docker push ghcr.io/$(REGISTRY)/$(IMAGE_NAME):$(VERSION)
-	@echo "✓ Pushed to GitHub Container Registry"
+	docker build --target stork -t ghcr.io/$(REGISTRY)/$(STORK_IMAGE_NAME):$(VERSION) .
+	docker push ghcr.io/$(REGISTRY)/$(STORK_IMAGE_NAME):$(VERSION)
+	@echo "✓ Pushed core and Stork images to GitHub Container Registry"
 
 # Utility targets
 docker-prune:

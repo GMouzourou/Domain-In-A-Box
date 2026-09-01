@@ -96,7 +96,6 @@ if [ "$INIT_DOMAIN" = "TRUE" ]; then
     touch "${PROVISION_SENTINEL}"
 fi
 dib-network-core-ctl configure
-dib-db-ctl configure
 dib-observability-ctl configure
 
 validate_service_configs() {
@@ -105,9 +104,6 @@ validate_service_configs() {
 
     echo "Validating network service configuration..."
     dib-network-core-ctl validate
-
-    echo "Validating PostgreSQL cluster configuration..."
-    dib-db-ctl validate
 
     echo "Validating Stork environment files..."
     dib-observability-ctl validate

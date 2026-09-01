@@ -202,6 +202,33 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
    - **Check Persistent Volumes:**  
      Use `kubectl get pvc` to see that the volume claims are bound.
 
+### Deploying via Helm Chart
+
+A Helm chart is provided under `charts/domain-in-a-box/` for installing Domain-In-A-Box on Kubernetes or RKE2 clusters.
+
+```bash
+helm install domain-in-a-box ./charts/domain-in-a-box \
+  --namespace domain-in-a-box --create-namespace \
+  --set domain.initialAdminPassword="YourStrongPassword123!" \
+  --set multus.address="192.168.1.1/24" \
+  --set multus.gateway="192.168.1.254"
+```
+
+#### External PostgreSQL Integration (Optional)
+
+If your Kubernetes cluster already runs an external PostgreSQL cluster (such as a shared database instance in RKE2 used by Gitea or other apps), you can configure Stork to use the external database instead of the internal container instance:
+
+```bash
+helm install domain-in-a-box ./charts/domain-in-a-box \
+  --set database.external.enabled=true \
+  --set database.external.host="postgresql.default.svc.cluster.local" \
+  --set database.external.port=5432 \
+  --set database.external.name="stork" \
+  --set database.external.user="stork" \
+  --set database.external.passwordSecret.name="postgres-credentials" \
+  --set database.external.passwordSecret.key="password"
+```
+
 ### Additional Considerations
 
 - **Security Context:**  
@@ -244,8 +271,17 @@ The `docker-compose.yml` file includes several settings that you might want to a
   - **DIB_SAMBA_METRICS_ENABLED:** Enables `smb_prometheus_endpoint` (default `true`).
   - **DIB_SAMBA_METRICS_PORT:** Samba Prometheus exporter port (default `9922`).
   - **DIB_BOOTSTRAP_TIMEOUT_SECONDS:** Maximum time for post-start dependency checks before bootstrap fails (default `120`).
+  - **DIB_EMBEDDED_POSTGRES:** Set to `false` when connecting Stork to an external PostgreSQL instance (default `true`).
+  - **STORK_DATABASE_HOST / STORK_DATABASE_PORT:** Connection details for Stork's PostgreSQL database (default `127.0.0.1:5432`).
+  - **STORK_DATABASE_NAME / STORK_DATABASE_USER_NAME / STORK_DATABASE_PASSWORD:** Stork database authentication credentials.
 
   Existing Samba, BIND, Kea, and Stork configuration files are preserved. On restart, Domain-In-A-Box reconciles only its managed values: the Samba metrics setting and optional Administrator password, BIND forwarders, and the Kea DHCP pool for subnet ID `1`.
+
+  Docker Compose starts the bundled `postgres:18-alpine` service by default. To use an existing PostgreSQL service instead, set the `STORK_DATABASE_*` variables in `.env` and start only the core and Stork services:
+
+  ```bash
+  docker compose up -d domain-controller stork-server
+  ```
 
 - **Persistent Volumes:**  
   The following named volumes are used to persist configuration and data:
