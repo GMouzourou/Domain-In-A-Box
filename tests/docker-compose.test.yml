@@ -4,6 +4,8 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      target: core
+    image: domain-in-a-box:ci
     hostname: domain-controller
     container_name: domain-in-a-box-test-server
     privileged: true
@@ -46,6 +48,15 @@ services:
       DIB_DNS_FORWARDERS: "1.1.1.1; 8.8.8.8;"
       DIB_SAMBA_METRICS_ENABLED: "true"
       DIB_SAMBA_METRICS_PORT: "9922"
+      DIB_LDAP_PASSWORD: "StorkLDAPTestPassword123!"
+      DIB_EMBEDDED_POSTGRES: "false"
+      STORK_DATABASE_HOST: "192.168.2.3"
+      STORK_DATABASE_PORT: "5432"
+      STORK_DATABASE_NAME: "stork"
+      STORK_DATABASE_USER_NAME: "stork"
+      STORK_DATABASE_PASSWORD: "StorkPostgresTestPassword123!"
+      STORK_SERVER_HOST: "192.168.2.4"
+      STORK_SERVER_PORT: "80"
     volumes:
       - bind-config:/etc/bind
       - bind-data:/var/cache/bind
@@ -58,18 +69,66 @@ services:
       - samba-data:/var/lib/samba
       - log-data:/var/log
     healthcheck:
-      test: ["CMD", "python3", "-c", "import socket, sys; s = socket.socket(); sys.exit(s.connect_ex(('127.0.0.1', 389)))"]
+      test: ["CMD", "python3", "-c", "import socket, sys; ports = (389, 9119, 9547); sys.exit(any(socket.socket().connect_ex(('127.0.0.1', port)) for port in ports))"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 40s
-    depends_on: []
+    depends_on:
+      postgres:
+        condition: service_healthy
+      stork-server:
+        condition: service_started
+
+  postgres:
+    image: postgres:18-alpine
+    container_name: domain-in-a-box-test-postgres
+    environment:
+      POSTGRES_DB: "stork"
+      POSTGRES_USER: "stork"
+      POSTGRES_PASSWORD: "StorkPostgresTestPassword123!"
+    networks:
+      domain_net:
+        ipv4_address: 192.168.2.3
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stork -d stork"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  stork-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: stork
+    image: domain-in-a-box-stork:ci
+    container_name: domain-in-a-box-test-stork-server
+    command: ["run"]
+    environment:
+      DIB_OBSERVABILITY_COMPONENT: "stork-server"
+      STORK_REST_HOST: "0.0.0.0"
+      STORK_LDAP_URL: "ldaps://192.168.2.1:636"
+      STORK_LDAP_DOMAIN: "domain.home.arpa"
+      STORK_LDAP_HOST: "domain-controller"
+      STORK_LDAP_PASSWORD: "StorkLDAPTestPassword123!"
+      STORK_DATABASE_HOST: "postgres"
+      STORK_DATABASE_PORT: "5432"
+      STORK_DATABASE_NAME: "stork"
+      STORK_DATABASE_USER_NAME: "stork"
+      STORK_DATABASE_PASSWORD: "StorkPostgresTestPassword123!"
+    networks:
+      domain_net:
+        ipv4_address: 192.168.2.4
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # Test Suite Runner
   test-runner:
     build:
       context: ..
       dockerfile: tests/linux-client/Dockerfile
+    image: domain-in-a-box-test-client:ci
     hostname: domain-client
     container_name: domain-in-a-box-test-client
     privileged: true
@@ -80,6 +139,7 @@ services:
       - domain_net
     environment:
       DOMAIN_CONTROLLER_IP: "192.168.2.1"
+      STORK_SERVER_IP: "192.168.2.4"
       DIB_DOMAIN: "DOMAIN"
       DIB_REALM: "DOMAIN.HOME.ARPA"
       DOMAIN_FQDN: "domain.home.arpa"

@@ -1,0 +1,27 @@
+Domain-In-A-Box has been deployed!
+
+1. Active Directory Domain: {{ .Values.domain.realm }}
+   Domain Name (NetBIOS):   {{ .Values.domain.name }}
+   DHCP Pool:               {{ .Values.domain.dhcpPool }}
+   DNS Forwarders:          {{ .Values.domain.dnsForwarders }}
+
+2. Network & Connectivity:
+   {{- if .Values.multus.enabled }}
+   Macvlan Interface: {{ .Values.multus.networkName }}
+   Static IP:         {{ .Values.multus.address }}
+   Gateway:           {{ .Values.multus.gateway }}
+   {{- else }}
+   Cluster Headless Service: {{ include "domain-in-a-box.fullname" . }}-svc
+   {{- end }}
+
+3. Database Configuration:
+   {{- if .Values.database.external.enabled }}
+   Stork is configured to use external PostgreSQL at:
+   Host: {{ .Values.database.external.host }}:{{ .Values.database.external.port }}
+   Database: {{ .Values.database.external.name }}
+   {{- else }}
+   Stork is using the internal PostgreSQL service managed within the container.
+   {{- end }}
+
+4. Check Deployment Status:
+   kubectl rollout status statefulset/{{ include "domain-in-a-box.fullname" . }}

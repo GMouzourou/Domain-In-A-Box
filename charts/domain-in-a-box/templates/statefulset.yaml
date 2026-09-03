@@ -1,0 +1,225 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "domain-in-a-box.fullname" . }}
+  labels:
+    {{- include "domain-in-a-box.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "domain-in-a-box.fullname" . }}-svc
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "domain-in-a-box.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "domain-in-a-box.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: domain-controller
+      {{- if .Values.multus.enabled }}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: '[{ "name": "{{ .Values.multus.networkName }}" }]'
+      {{- end }}
+    spec:
+      securityContext:
+        runAsUser: 0
+      containers:
+        - name: domain-server
+          image: "{{ .Values.coreImage.repository }}:{{ .Values.coreImage.tag }}"
+          imagePullPolicy: {{ .Values.coreImage.pullPolicy }}
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
+          env:
+            - name: DIB_REALM
+              value: {{ .Values.domain.realm | quote }}
+            - name: DIB_DOMAIN
+              value: {{ .Values.domain.name | quote }}
+            - name: DIB_DOMAIN_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (printf "%s-secret" (include "domain-in-a-box.fullname" .)) .Values.domain.adminPasswordSecret.name }}
+                  key: {{ default "domain-admin-password" .Values.domain.adminPasswordSecret.key }}
+            - name: DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART
+              value: {{ .Values.domain.syncPasswordOnRestart | quote }}
+            - name: DIB_INTERFACE
+              value: {{ .Values.domain.interface | quote }}
+            - name: DIB_DHCP_POOL
+              value: {{ .Values.domain.dhcpPool | quote }}
+            - name: DIB_DNS_FORWARDERS
+              value: {{ .Values.domain.dnsForwarders | quote }}
+            {{- if .Values.clusterDNS.domain }}
+            - name: DIB_CLUSTER_DOMAIN
+              value: {{ .Values.clusterDNS.domain | quote }}
+            {{- end }}
+            - name: DIB_SAMBA_METRICS_ENABLED
+              value: {{ .Values.metrics.enabled | quote }}
+            - name: DIB_SAMBA_METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
+            - name: DIB_LDAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "domain-in-a-box.fullname" . }}-secret
+                  key: stork-ldap-password
+            - name: DIB_EMBEDDED_POSTGRES
+              value: "false"
+            - name: STORK_DATABASE_HOST
+              value: {{ .Values.database.external.enabled | ternary .Values.database.external.host (printf "%s-postgresql" (include "domain-in-a-box.fullname" .)) | quote }}
+            - name: STORK_DATABASE_PORT
+              value: {{ .Values.database.external.enabled | ternary .Values.database.external.port 5432 | quote }}
+            - name: STORK_DATABASE_NAME
+              value: {{ .Values.database.external.enabled | ternary .Values.database.external.name "stork" | quote }}
+            - name: STORK_DATABASE_USER_NAME
+              value: {{ .Values.database.external.enabled | ternary .Values.database.external.user "stork" | quote }}
+            - name: STORK_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.external.enabled | ternary (default "" .Values.database.external.passwordSecret.name) (printf "%s-secret" (include "domain-in-a-box.fullname" .)) }}
+                  key: {{ .Values.database.external.enabled | ternary (default "password" .Values.database.external.passwordSecret.key) "stork-db-password" }}
+            - name: STORK_SERVER_HOST
+              value: {{ printf "%s-stork-server" (include "domain-in-a-box.fullname" .) | quote }}
+            - name: STORK_SERVER_PORT
+              value: "80"
+          ports:
+            - name: dns-tcp
+              containerPort: 53
+              protocol: TCP
+            - name: dns-udp
+              containerPort: 53
+              protocol: UDP
+            - name: dhcp-server
+              containerPort: 67
+              protocol: UDP
+            - name: dhcp-client
+              containerPort: 68
+              protocol: UDP
+            - name: kerberos-tcp
+              containerPort: 88
+              protocol: TCP
+            - name: kerberos-udp
+              containerPort: 88
+              protocol: UDP
+            - name: ntp
+              containerPort: 123
+              protocol: UDP
+            - name: rpc-epmap
+              containerPort: 135
+              protocol: TCP
+            - name: netbios-ns
+              containerPort: 137
+              protocol: UDP
+            - name: netbios-dgm
+              containerPort: 138
+              protocol: UDP
+            - name: netbios-ssn
+              containerPort: 139
+              protocol: TCP
+            - name: ldap
+              containerPort: 389
+              protocol: TCP
+            - name: cldap
+              containerPort: 389
+              protocol: UDP
+            - name: smb
+              containerPort: 445
+              protocol: TCP
+            - name: kpasswd-tcp
+              containerPort: 464
+              protocol: TCP
+            - name: kpasswd-udp
+              containerPort: 464
+              protocol: UDP
+            - name: ldaps
+              containerPort: 636
+              protocol: TCP
+            - name: gc-tcp
+              containerPort: 3268
+              protocol: TCP
+            - name: gc-ssl
+              containerPort: 3269
+              protocol: TCP
+            - name: alt-dns-tcp
+              containerPort: 5353
+              protocol: TCP
+            - name: alt-dns-udp
+              containerPort: 5353
+              protocol: UDP
+            - name: bind-metrics
+              containerPort: 9119
+              protocol: TCP
+            - name: kea-metrics
+              containerPort: 9547
+              protocol: TCP
+            - name: samba-metrics
+              containerPort: 9922
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          startupProbe:
+            exec:
+              command: ["python3", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 389), 5); s.close()"]
+            periodSeconds: 10
+            failureThreshold: 30
+          # LDAP answers well before Kea DDNS and the Stork agent finish, so
+          # readiness tracks the observability endpoints that close out bootstrap.
+          readinessProbe:
+            exec:
+              command: ["python3", "-c", "import socket, sys; sys.exit(any(socket.socket().connect_ex(('127.0.0.1', port)) for port in (389, 9119, 9547)))"]
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/samba
+              subPath: samba
+            - name: data
+              mountPath: /etc/bind
+              subPath: bind-config
+            - name: data
+              mountPath: /var/cache/bind
+              subPath: bind-data
+            - name: data
+              mountPath: /etc/chrony
+              subPath: chrony-config
+            - name: data
+              mountPath: /var/lib/chrony
+              subPath: chrony-data
+            - name: data
+              mountPath: /etc/kea
+              subPath: kea-config
+            - name: data
+              mountPath: /var/lib/kea
+              subPath: kea-data
+            - name: data
+              mountPath: /etc/stork
+              subPath: stork-config
+            - name: data
+              mountPath: /var/lib/stork-agent
+              subPath: stork-data
+            - name: data
+              mountPath: /var/log
+              subPath: log-data
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ {{ .Values.persistence.accessMode | quote }} ]
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size | quote }}
+  {{- end }}

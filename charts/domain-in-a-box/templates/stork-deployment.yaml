@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "domain-in-a-box.fullname" . }}-stork-server
+  labels:
+    {{- include "domain-in-a-box.labels" . | nindent 4 }}
+    app.kubernetes.io/component: stork-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "domain-in-a-box.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: stork-server
+  template:
+    metadata:
+      labels:
+        {{- include "domain-in-a-box.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: stork-server
+      {{- if and .Values.multus.enabled .Values.multus.storkServerNetworkName }}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: '[{ "name": "{{ .Values.multus.storkServerNetworkName }}" }]'
+      {{- end }}
+    spec:
+      containers:
+        - name: stork-server
+          image: "{{ .Values.storkImage.repository }}:{{ .Values.storkImage.tag }}"
+          imagePullPolicy: {{ .Values.storkImage.pullPolicy }}
+          args: ["run"]
+          env:
+            - name: DIB_OBSERVABILITY_COMPONENT
+              value: "stork-server"
+            - name: STORK_REST_HOST
+              value: "0.0.0.0"
+            - name: STORK_LDAP_URL
+              value: {{ printf "ldaps://%s-svc:636" (include "domain-in-a-box.fullname" .) | quote }}
+            - name: STORK_LDAP_DOMAIN
+              value: {{ .Values.domain.realm | lower | quote }}
+            - name: STORK_LDAP_HOST
+              value: {{ include "domain-in-a-box.fullname" . | quote }}
+            - name: STORK_LDAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "domain-in-a-box.fullname" . }}-secret
+                  key: stork-ldap-password
+            - name: STORK_DATABASE_HOST
+              value: {{ .Values.database.external.enabled | ternary .Values.database.external.host (printf "%s-postgresql" (include "domain-in-a-box.fullname" .)) | quote }}
+            - name: STORK_DATABASE_PORT
+              value: {{ .Values.database.external.enabled | ternary .Values.database.external.port 5432 | quote }}
+            - name: STORK_DATABASE_NAME
+              value: {{ .Values.database.external.enabled | ternary .Values.database.external.name "stork" | quote }}
+            - name: STORK_DATABASE_USER_NAME
+              value: {{ .Values.database.external.enabled | ternary .Values.database.external.user "stork" | quote }}
+            - name: STORK_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.external.enabled | ternary (default "" .Values.database.external.passwordSecret.name) (printf "%s-secret" (include "domain-in-a-box.fullname" .)) }}
+                  key: {{ .Values.database.external.enabled | ternary (default "password" .Values.database.external.passwordSecret.key) "stork-db-password" }}
+          ports:
+            - name: stork-http
+              containerPort: 80
+              protocol: TCP

@@ -18,6 +18,7 @@ const (
 
 type testConfig struct {
 	DomainControllerIP string
+	StorkServerIP      string
 	Realm              string
 	DNSDomain          string
 	AdminUser          string
@@ -28,6 +29,7 @@ type testConfig struct {
 	DHCPTestInterface  string
 	DHCPLeaseFile      string
 	DHCPLeaseSuccess   bool
+	DHCPRequireLease   bool
 	Verbose            bool
 }
 
@@ -47,6 +49,7 @@ func getTestConfig(cmd *cobra.Command) testConfig {
 	}
 	return testConfig{
 		DomainControllerIP: cmd.Flag("domain-controller").Value.String(),
+		StorkServerIP:      envOrDefault(cmd.Flag("domain-controller").Value.String(), "STORK_SERVER_IP", "TESTRUNNER_STORK_SERVER_IP"),
 		Realm:              cmd.Flag("realm").Value.String(),
 		DNSDomain:          cmd.Flag("dns-domain").Value.String(),
 		AdminUser:          cmd.Flag("admin-user").Value.String(),
@@ -57,6 +60,7 @@ func getTestConfig(cmd *cobra.Command) testConfig {
 		DHCPTestInterface:  envOrDefault("", "DIB_DHCP_TEST_INTERFACE", "TESTRUNNER_DHCP_INTERFACE"),
 		DHCPLeaseFile:      envOrDefault("/var/lib/dhcp/dhclient.leases", "DIB_DHCP_LEASE_FILE", "TESTRUNNER_DHCP_LEASE_FILE"),
 		DHCPLeaseSuccess:   strings.EqualFold(envOrDefault("false", "DIB_DHCP_LEASE_SUCCESS", "TESTRUNNER_DHCP_LEASE_SUCCESS"), "true"),
+		DHCPRequireLease:   strings.EqualFold(envOrDefault("false", "DIB_DHCP_REQUIRE_LEASE", "TESTRUNNER_DHCP_REQUIRE_LEASE"), "true"),
 		Verbose:            verbose,
 	}
 }

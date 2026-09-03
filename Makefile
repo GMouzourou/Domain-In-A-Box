@@ -1,4 +1,4 @@
-.PHONY: help build test test-unit test-dns test-dhcp test-ad test-ad-linux test-all test-verbose test-clean lint shellcheck hadolint docker-lint push push-docker push-ghcr dev-up dev-down dev-logs clean
+.PHONY: help build build-stork test test-unit test-dns test-dhcp test-ad test-ad-linux test-all test-prebuilt test-verbose test-clean lint shellcheck hadolint helm-lint docker-lint push push-docker push-ghcr dev-up dev-down dev-logs k8s-up k8s-build k8s-load k8s-images k8s-deploy k8s-test k8s-logs k8s-down k8s-all clean
 
 # Default target
 help:
@@ -10,6 +10,7 @@ help:
 	@echo ""
 	@echo "Testing:"
 	@echo "  make test-all              Run all tests with docker-compose"
+	@echo "  make test-prebuilt         Run all tests against already-built images"
 	@echo "  make test-unit             Run Go unit tests for the test runner"
 	@echo "  make test-verbose          Run tests with verbose output"
 	@echo "  make test-health           Run health check tests"
@@ -17,6 +18,17 @@ help:
 	@echo "  make test-dhcp             Run DHCP functionality tests"
 	@echo "  make test-ad               Run Active Directory tests"
 	@echo "  make test-ad-linux         Run Linux AD join tests"
+	@echo ""
+	@echo "Kubernetes (kind + Multus/macvlan):"
+	@echo "  make k8s-all               Provision, deploy and test end to end"
+	@echo "  make k8s-up                Create the kind cluster with Multus"
+	@echo "  make k8s-images            Build and load images into the cluster"
+	@echo "  make k8s-build             Build the images only"
+	@echo "  make k8s-load              Load already-built images into the cluster"
+	@echo "  make k8s-deploy            Install the Helm chart"
+	@echo "  make k8s-test              Run the test suite in the cluster"
+	@echo "  make k8s-logs              Collect cluster diagnostics"
+	@echo "  make k8s-down              Delete the cluster and lab network"
 	@echo ""
 	@echo "Local Development:"
 	@echo "  make dev-up                Start domain controller for development"
@@ -28,6 +40,7 @@ help:
 	@echo "  make lint                  Run all linting checks"
 	@echo "  make shellcheck            Lint shell scripts"
 	@echo "  make hadolint              Lint Dockerfile"
+	@echo "  make helm-lint             Lint and render the Helm chart"
 	@echo "  make docker-lint           Validate docker-compose files"
 	@echo ""
 	@echo "Cleanup:"
@@ -51,14 +64,20 @@ help:
 # Image version
 VERSION ?= latest
 IMAGE_NAME ?= domain-in-a-box
+STORK_IMAGE_NAME ?= domain-in-a-box-stork
 REGISTRY ?= gmouzourou
 COMPOSE ?= docker compose
 
 # Build targets
 build:
 	@echo "Building Domain-In-A-Box image..."
-	docker build -t $(REGISTRY)/$(IMAGE_NAME):$(VERSION) .
+	docker build --target core -t $(REGISTRY)/$(IMAGE_NAME):$(VERSION) .
 	@echo "✓ Build complete: $(REGISTRY)/$(IMAGE_NAME):$(VERSION)"
+
+build-stork:
+	@echo "Building Domain-In-A-Box Stork image..."
+	docker build --target stork -t ghcr.io/$(REGISTRY)/$(STORK_IMAGE_NAME):$(VERSION) .
+	@echo "✓ Build complete: ghcr.io/$(REGISTRY)/$(STORK_IMAGE_NAME):$(VERSION)"
 
 build-test-client:
 	@echo "Building test client image..."
@@ -69,6 +88,12 @@ build-test-client:
 test-all: test-clean
 	@echo "Starting integration tests..."
 	$(COMPOSE) -f tests/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test-runner
+	@echo "✓ Tests complete"
+
+# Same suite, but reuses whatever images are already tagged locally.
+test-prebuilt: test-clean
+	@echo "Starting integration tests with prebuilt images..."
+	$(COMPOSE) -f tests/docker-compose.test.yml up --abort-on-container-exit --exit-code-from test-runner
 	@echo "✓ Tests complete"
 
 test-clean:
@@ -108,13 +133,13 @@ test-ad-linux:
 	cd tests/test-runner && go run . run ad-linux
 
 # Linting targets
-lint: shellcheck hadolint docker-lint
+lint: shellcheck hadolint docker-lint helm-lint
 	@echo "✓ All linting checks passed"
 
 shellcheck:
 	@echo "Linting shell scripts..."
 	@if command -v shellcheck &> /dev/null; then \
-		shellcheck -x entrypoint.sh entrypoint.d/*.sh tests/linux-client/entrypoint.sh; \
+		shellcheck -x entrypoint.sh tests/linux-client/entrypoint.sh tests/kubernetes/lab.sh; \
 		echo "✓ Shell scripts checked"; \
 	else \
 		echo "⚠ shellcheck not available"; \
@@ -134,6 +159,44 @@ docker-lint:
 	$(COMPOSE) -f docker-compose.yml config > /dev/null
 	$(COMPOSE) -f tests/docker-compose.test.yml config > /dev/null
 	@echo "✓ Docker Compose files valid"
+
+helm-lint:
+	@echo "Linting Helm chart..."
+	@if command -v helm &> /dev/null; then \
+		helm lint charts/domain-in-a-box; \
+		helm template dib charts/domain-in-a-box > /dev/null; \
+		helm template dib charts/domain-in-a-box -f tests/kubernetes/values.ci.yaml > /dev/null; \
+		echo "✓ Helm chart valid"; \
+	else \
+		echo "⚠ helm not available"; \
+	fi
+
+# Kubernetes lab targets (kind + Multus/macvlan)
+k8s-up:
+	tests/kubernetes/lab.sh up
+
+k8s-images:
+	tests/kubernetes/lab.sh images
+
+k8s-build:
+	tests/kubernetes/lab.sh build
+
+k8s-load:
+	tests/kubernetes/lab.sh load
+
+k8s-deploy:
+	tests/kubernetes/lab.sh deploy
+
+k8s-test:
+	tests/kubernetes/lab.sh test
+
+k8s-logs:
+	tests/kubernetes/lab.sh logs
+
+k8s-down:
+	tests/kubernetes/lab.sh down
+
+k8s-all: k8s-up k8s-images k8s-deploy k8s-test
 
 # Development targets
 dev-up:
@@ -186,14 +249,16 @@ push-docker:
 	@echo "✓ Pushed to Docker Hub"
 
 push-ghcr:
-	@echo "Pushing to GitHub Container Registry..."
+	@echo "Pushing core and Stork images to GitHub Container Registry..."
 	@if [ -z "$(GITHUB_TOKEN)" ]; then \
 		echo "Error: GITHUB_TOKEN required"; \
 		exit 1; \
 	fi
 	docker tag $(REGISTRY)/$(IMAGE_NAME):$(VERSION) ghcr.io/$(REGISTRY)/$(IMAGE_NAME):$(VERSION)
 	docker push ghcr.io/$(REGISTRY)/$(IMAGE_NAME):$(VERSION)
-	@echo "✓ Pushed to GitHub Container Registry"
+	docker build --target stork -t ghcr.io/$(REGISTRY)/$(STORK_IMAGE_NAME):$(VERSION) .
+	docker push ghcr.io/$(REGISTRY)/$(STORK_IMAGE_NAME):$(VERSION)
+	@echo "✓ Pushed core and Stork images to GitHub Container Registry"
 
 # Utility targets
 docker-prune:
@@ -201,4 +266,4 @@ docker-prune:
 	docker system prune -f
 	@echo "✓ Docker resources pruned"
 
-.DEFAULT_GOAL := help
+

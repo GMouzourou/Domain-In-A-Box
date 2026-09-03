@@ -6,14 +6,6 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# Load service-specific helpers to keep the main entrypoint readable.
-. "/entrypoint.d/chrony.sh"
-. "/entrypoint.d/samba.sh"
-. "/entrypoint.d/bind.sh"
-. "/entrypoint.d/postgres.sh"
-. "/entrypoint.d/kea.sh"
-. "/entrypoint.d/stork.sh"
-
 # Process variables
 : "${DIB_REALM:?Environment variable DIB_REALM is not set}"
 : "${DIB_DOMAIN:?Environment variable DIB_DOMAIN is not set}"
@@ -48,9 +40,18 @@ if [ -z "${SUBNET}" ] || [ -z "${GATEWAY}" ]; then
 fi
 
 # Configure resolv.conf
+# Keep the resolver the platform handed us: pointing DNS at ourselves otherwise
+# makes in-cluster service names unresolvable during bootstrap.
+UPSTREAM_NAMESERVERS=$(awk -v self="${IP}" '/^nameserver/ && $2 != self { printf "%s ", $2 }' /etc/resolv.conf)
+UPSTREAM_SEARCH=$(awk '/^search/ { $1 = ""; sub(/^ /, ""); print; exit }' /etc/resolv.conf)
+SEARCH_DOMAINS="${DNS_DOMAIN}"
+if [ -n "${UPSTREAM_SEARCH}" ]; then
+    SEARCH_DOMAINS="${DNS_DOMAIN} ${UPSTREAM_SEARCH}"
+fi
+
 echo "Writing /etc/resolv.conf..."
 tee /etc/resolv.conf >/dev/null <<EOF
-search ${DNS_DOMAIN}
+search ${SEARCH_DOMAINS}
 nameserver ${IP}
 EOF
 
@@ -87,26 +88,7 @@ if [ ! -f "${PROVISION_SENTINEL}" ]; then
     chmod -R 664 /var/log/kea
     chmod 700 /var/log/samba/cores
 
-    dib_provision_samba_domain
-
-    touch "${PROVISION_SENTINEL}"
     INIT_DOMAIN=TRUE
-fi
-
-# Ensure required config files exist without overwriting user-managed customizations.
-dib_configure_chrony
-dib_configure_samba
-dib_configure_bind9
-dib_configure_postgresql
-dib_configure_kea
-dib_configure_stork
-
-if [ "$INIT_DOMAIN" = "FALSE" ]; then
-    echo "Updating DHCP pool and DNS forwarders from latest configuration..."
-    dib_update_samba_admin_password
-    dib_update_samba_metrics
-    dib_update_bind_forwarders
-    dib_update_kea_dhcp_pool
 fi
 
 export INIT_DOMAIN
@@ -115,28 +97,26 @@ export CONTAINER_HOSTNAME
 export IP
 export SUBNET
 export REVERSE_ZONE
+export GATEWAY
+export DIB_UPSTREAM_NAMESERVERS="${UPSTREAM_NAMESERVERS}"
+
+# Configure services through their ownership boundaries.
+dib-identity-core-ctl configure
+if [ "$INIT_DOMAIN" = "TRUE" ]; then
+    touch "${PROVISION_SENTINEL}"
+fi
+dib-network-core-ctl configure
+dib-observability-ctl configure
 
 validate_service_configs() {
-    echo "Validating Chrony config..."
-    chronyd -p -f /etc/chrony/chrony.conf >/dev/null
-
     echo "Validating Samba config..."
-    testparm -s >/dev/null
+    dib-identity-core-ctl validate
 
-    echo "Validating BIND config..."
-    named-checkconf /etc/bind/named.conf
-
-    echo "Validating PostgreSQL cluster configuration..."
-    dib_validate_postgresql_cluster
-
-    echo "Validating Kea DHCP4 config..."
-    /usr/sbin/kea-dhcp4 -t /etc/kea/kea-dhcp4.conf >/dev/null
-
-    echo "Validating Kea DHCP-DDNS config..."
-    /usr/sbin/kea-dhcp-ddns -t /etc/kea/kea-dhcp-ddns.conf >/dev/null
+    echo "Validating network service configuration..."
+    dib-network-core-ctl validate
 
     echo "Validating Stork environment files..."
-    dib_validate_stork_configs
+    dib-observability-ctl validate
 }
 
 if [ "$#" -eq 0 ]; then
