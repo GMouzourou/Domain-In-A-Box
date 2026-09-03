@@ -140,6 +140,8 @@ FROM ubuntu:26.04 AS stork
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
 COPY --from=go-builder /out/dib-observability-ctl /usr/local/bin/dib-observability-ctl
 
 RUN apt-get update && \

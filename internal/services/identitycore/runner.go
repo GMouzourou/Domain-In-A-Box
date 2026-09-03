@@ -215,7 +215,10 @@ func installTLSAssets(ctx context.Context) error {
 	if err := os.MkdirAll("/var/lib/samba/private/tls", 0o755); err != nil {
 		return err
 	}
-	for _, asset := range []struct{ source, target string; mode os.FileMode }{{paths[0], "cert.pem", 0o644}, {paths[1], "key.pem", 0o600}, {paths[2], "ca.pem", 0o644}} {
+	for _, asset := range []struct {
+		source, target string
+		mode           os.FileMode
+	}{{paths[0], "cert.pem", 0o644}, {paths[1], "key.pem", 0o600}, {paths[2], "ca.pem", 0o644}} {
 		contents, err := os.ReadFile(asset.source)
 		if err != nil {
 			return err

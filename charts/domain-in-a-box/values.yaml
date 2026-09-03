@@ -27,10 +27,18 @@ metrics:
   enabled: true
   port: 9922
 
+# Domain of the in-cluster DNS. The controller points its own resolver at BIND,
+# so BIND needs a forward zone to keep resolving service names. Set to "" to skip.
+clusterDNS:
+  domain: "cluster.local"
+
 multus:
   enabled: true
   createNAD: true
   networkName: "macvlan-network"
+  # The agent registers with its macvlan address, so the Stork server needs a
+  # presence on the same segment to reach it. Set to an existing attachment name.
+  storkServerNetworkName: ""
   masterInterface: "eth0"
   address: "192.168.1.1/24"
   gateway: "192.168.1.254"

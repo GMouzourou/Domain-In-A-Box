@@ -16,12 +16,16 @@ spec:
       labels:
         {{- include "domain-in-a-box.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: stork-server
+      {{- if and .Values.multus.enabled .Values.multus.storkServerNetworkName }}
+      annotations:
+        k8s.v1.cni.cncf.io/networks: '[{ "name": "{{ .Values.multus.storkServerNetworkName }}" }]'
+      {{- end }}
     spec:
       containers:
         - name: stork-server
           image: "{{ .Values.storkImage.repository }}:{{ .Values.storkImage.tag }}"
           imagePullPolicy: {{ .Values.storkImage.pullPolicy }}
-          command: ["run"]
+          args: ["run"]
           env:
             - name: DIB_OBSERVABILITY_COMPONENT
               value: "stork-server"

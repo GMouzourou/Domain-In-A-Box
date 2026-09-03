@@ -1,2 +1,4 @@
 .vscode/
 tests/test-runner/test-runner
+.tools/
+artifacts/

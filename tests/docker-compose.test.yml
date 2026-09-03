@@ -5,6 +5,7 @@ services:
       context: ..
       dockerfile: Dockerfile
       target: core
+    image: domain-in-a-box:ci
     hostname: domain-controller
     container_name: domain-in-a-box-test-server
     privileged: true
@@ -100,6 +101,7 @@ services:
       context: ..
       dockerfile: Dockerfile
       target: stork
+    image: domain-in-a-box-stork:ci
     container_name: domain-in-a-box-test-stork-server
     command: ["run"]
     environment:
@@ -126,6 +128,7 @@ services:
     build:
       context: ..
       dockerfile: tests/linux-client/Dockerfile
+    image: domain-in-a-box-test-client:ci
     hostname: domain-client
     container_name: domain-in-a-box-test-client
     privileged: true

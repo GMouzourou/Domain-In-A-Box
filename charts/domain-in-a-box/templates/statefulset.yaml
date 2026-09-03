@@ -14,6 +14,7 @@ spec:
     metadata:
       labels:
         {{- include "domain-in-a-box.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: domain-controller
       {{- if .Values.multus.enabled }}
       annotations:
         k8s.v1.cni.cncf.io/networks: '[{ "name": "{{ .Values.multus.networkName }}" }]'
@@ -47,6 +48,10 @@ spec:
               value: {{ .Values.domain.dhcpPool | quote }}
             - name: DIB_DNS_FORWARDERS
               value: {{ .Values.domain.dnsForwarders | quote }}
+            {{- if .Values.clusterDNS.domain }}
+            - name: DIB_CLUSTER_DOMAIN
+              value: {{ .Values.clusterDNS.domain | quote }}
+            {{- end }}
             - name: DIB_SAMBA_METRICS_ENABLED
               value: {{ .Values.metrics.enabled | quote }}
             - name: DIB_SAMBA_METRICS_PORT
@@ -155,6 +160,13 @@ spec:
               command: ["python3", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 389), 5); s.close()"]
             periodSeconds: 10
             failureThreshold: 30
+          # LDAP answers well before Kea DDNS and the Stork agent finish, so
+          # readiness tracks the observability endpoints that close out bootstrap.
+          readinessProbe:
+            exec:
+              command: ["python3", "-c", "import socket, sys; sys.exit(any(socket.socket().connect_ex(('127.0.0.1', port)) for port in (389, 9119, 9547)))"]
+            periodSeconds: 10
+            failureThreshold: 3
           volumeMounts:
             - name: data
               mountPath: /var/lib/samba

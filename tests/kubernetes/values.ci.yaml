@@ -1,0 +1,51 @@
+# Values for the ephemeral CI cluster. Images are side-loaded into the kind
+# node, so nothing is ever pulled from a registry.
+fullnameOverride: dib
+
+coreImage:
+  repository: domain-in-a-box
+  tag: "ci"
+  pullPolicy: Never
+
+storkImage:
+  repository: domain-in-a-box-stork
+  tag: "ci"
+  pullPolicy: Never
+
+domain:
+  realm: "DOMAIN.HOME.ARPA"
+  name: "DOMAIN"
+  interface: "net1"
+  dhcpPool: "192.168.3.100-192.168.3.199"
+  dnsForwarders: "1.1.1.1; 8.8.8.8;"
+  syncPasswordOnRestart: false
+  initialAdminPassword: "P@ssw0rd"
+
+metrics:
+  enabled: true
+  port: 9922
+
+multus:
+  enabled: true
+  # The attachments are applied from tests/kubernetes/network-attachments.yaml
+  # so the CI-only client network stays out of the chart.
+  createNAD: false
+  networkName: "dib-macvlan-server"
+  storkServerNetworkName: "dib-macvlan-stork"
+
+database:
+  initialPassword: "StorkPostgresTestPassword123!"
+  initialLDAPPassword: "StorkLDAPTestPassword123!"
+
+persistence:
+  enabled: true
+  accessMode: ReadWriteOnce
+  size: 2Gi
+
+resources:
+  requests:
+    cpu: "250m"
+    memory: "512Mi"
+  limits:
+    cpu: "2000m"
+    memory: "4Gi"

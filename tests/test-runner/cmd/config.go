@@ -29,6 +29,7 @@ type testConfig struct {
 	DHCPTestInterface  string
 	DHCPLeaseFile      string
 	DHCPLeaseSuccess   bool
+	DHCPRequireLease   bool
 	Verbose            bool
 }
 
@@ -59,6 +60,7 @@ func getTestConfig(cmd *cobra.Command) testConfig {
 		DHCPTestInterface:  envOrDefault("", "DIB_DHCP_TEST_INTERFACE", "TESTRUNNER_DHCP_INTERFACE"),
 		DHCPLeaseFile:      envOrDefault("/var/lib/dhcp/dhclient.leases", "DIB_DHCP_LEASE_FILE", "TESTRUNNER_DHCP_LEASE_FILE"),
 		DHCPLeaseSuccess:   strings.EqualFold(envOrDefault("false", "DIB_DHCP_LEASE_SUCCESS", "TESTRUNNER_DHCP_LEASE_SUCCESS"), "true"),
+		DHCPRequireLease:   strings.EqualFold(envOrDefault("false", "DIB_DHCP_REQUIRE_LEASE", "TESTRUNNER_DHCP_REQUIRE_LEASE"), "true"),
 		Verbose:            verbose,
 	}
 }

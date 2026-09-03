@@ -12,6 +12,7 @@ This directory contains the Docker-based integration test environment for **Doma
 | `linux-client/Dockerfile` | Builds the Ubuntu-based client used for AD join tests |
 | `linux-client/entrypoint.sh` | Starts D-Bus, `realmd`, DHCP, Kerberos, and SSSD inside the client |
 | `test-runner/` | Go CLI that executes the test suites |
+| `kubernetes/` | Ephemeral kind cluster with Multus/macvlan for running the same suites against the Helm chart |
 
 ---
 
@@ -54,6 +55,36 @@ go run . run ad-linux --verbose
 
 ---
 
+## Kubernetes Test Environment
+
+`tests/kubernetes/` runs the same suites against the Helm chart on a throwaway
+[kind](https://kind.sigs.k8s.io/) cluster. A dedicated Docker bridge
+(`192.168.3.0/24`) is attached to the kind node and used as the macvlan master,
+so the domain controller and the test client share a real L2 segment. That is
+what allows the client to request an actual DHCP lease from Kea, which the
+compose environment cannot do.
+
+```bash
+make k8s-all      # up + images + deploy + test
+make k8s-logs     # diagnostics into artifacts/k8s
+make k8s-down     # delete the cluster and the lab bridge
+```
+
+| File | Purpose |
+| --- | --- |
+| `kind-cluster.yaml` | Single-node cluster; both pods must share a macvlan master |
+| `network-attachments.yaml` | CI-only attachments: static for the DC and Stork, IPAM-less for the client |
+| `values.ci.yaml` | Chart values using side-loaded images and the CI attachments |
+| `test-runner-job.yaml` | Runs the suites in-cluster with `ENABLE_DHCP_CLIENT=true` |
+| `lab.sh` | Provisions the cluster, Multus, images, chart and job |
+
+The controller points its own resolver at BIND, so the chart sets
+`DIB_CLUSTER_DOMAIN` and BIND forwards that domain back to the cluster DNS the
+pod started with. That is what keeps `dib-postgresql` and `dib-stork-server`
+resolvable during bootstrap.
+
+---
+
 ## Debugging Tips
 
 ### Bring the stack up without immediately tearing it down
@@ -91,6 +122,7 @@ kinit Administrator@DOMAIN.HOME.ARPA
 Latest verified behavior:
 
 - `make test-all` currently completes successfully with `Passed: 5/5`
+- `make k8s-all` completes successfully with `Passed: 5/5`, including a real DHCP lease from the Kea pool
 - the Linux client image is Ubuntu-based and validates `realm`, `adcli`, and `sssd` domain-join behavior
 - the test client preserves Docker-managed networking by default (`ENABLE_DHCP_CLIENT=false`) and only attempts a DHCP lease when explicitly enabled for experiments
 

@@ -40,9 +40,18 @@ if [ -z "${SUBNET}" ] || [ -z "${GATEWAY}" ]; then
 fi
 
 # Configure resolv.conf
+# Keep the resolver the platform handed us: pointing DNS at ourselves otherwise
+# makes in-cluster service names unresolvable during bootstrap.
+UPSTREAM_NAMESERVERS=$(awk -v self="${IP}" '/^nameserver/ && $2 != self { printf "%s ", $2 }' /etc/resolv.conf)
+UPSTREAM_SEARCH=$(awk '/^search/ { $1 = ""; sub(/^ /, ""); print; exit }' /etc/resolv.conf)
+SEARCH_DOMAINS="${DNS_DOMAIN}"
+if [ -n "${UPSTREAM_SEARCH}" ]; then
+    SEARCH_DOMAINS="${DNS_DOMAIN} ${UPSTREAM_SEARCH}"
+fi
+
 echo "Writing /etc/resolv.conf..."
 tee /etc/resolv.conf >/dev/null <<EOF
-search ${DNS_DOMAIN}
+search ${SEARCH_DOMAINS}
 nameserver ${IP}
 EOF
 
@@ -89,6 +98,7 @@ export IP
 export SUBNET
 export REVERSE_ZONE
 export GATEWAY
+export DIB_UPSTREAM_NAMESERVERS="${UPSTREAM_NAMESERVERS}"
 
 # Configure services through their ownership boundaries.
 dib-identity-core-ctl configure

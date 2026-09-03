@@ -9,6 +9,7 @@ spec:
   publishNotReadyAddresses: true
   selector:
     {{- include "domain-in-a-box.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: domain-controller
   ports:
     - name: dns-tcp
       port: 53

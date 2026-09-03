@@ -258,8 +258,8 @@ func configureBind(ctx context.Context) error {
 		return err
 	}
 	files := map[string]string{
-		"/etc/bind/named.conf":            "include \"/etc/bind/named.conf.options\";\ninclude \"/etc/bind/named.conf.local\";\ninclude \"/etc/bind/named.conf.root-hints\";\ninclude \"/etc/bind/rndc.key\";\n",
-		"/etc/bind/named.conf.options":    "options {\n    directory \"/var/cache/bind\";\n    pid-file \"/run/named/named.pid\";\n\n    allow-query { 127.0.0.1; " + subnet + "; };\n    allow-update { none; };\n    allow-recursion { 127.0.0.1; " + subnet + "; };\n    allow-transfer { none; };\n    forwarders { " + forwarders + " };\n    listen-on port 5353 { " + ip + "; };\n    listen-on-v6 port 5353 { none; };\n};\n\nstatistics-channels {\n    inet 127.0.0.1 port 8053 allow { 127.0.0.1; };\n};\n",
+		"/etc/bind/named.conf":            "include \"/etc/bind/named.conf.options\";\ninclude \"/etc/bind/named.conf.local\";\ninclude \"/etc/bind/named.conf.cluster\";\ninclude \"/etc/bind/named.conf.root-hints\";\ninclude \"/etc/bind/rndc.key\";\n",
+		"/etc/bind/named.conf.options":    "options {\n    directory \"/var/cache/bind\";\n    pid-file \"/run/named/named.pid\";\n\n    allow-query { 127.0.0.1; " + subnet + "; };\n    allow-update { none; };\n    allow-recursion { 127.0.0.1; " + subnet + "; };\n    allow-transfer { none; };\n    forwarders { " + forwarders + " };\n    listen-on port 5353 { " + ip + "; };\n    listen-on-v6 port 5353 { none; };\n    include \"/etc/bind/named.conf.cluster-options\";\n};\n\nstatistics-channels {\n    inet 127.0.0.1 port 8053 allow { 127.0.0.1; };\n};\n",
 		"/etc/bind/named.conf.local":      "zone \"" + dnsDomain + "\" {\n    type forward;\n    forward only;\n    forwarders { 127.0.0.1; };\n};\n\nzone \"" + reverseZone + "\" {\n    type forward;\n    forward only;\n    forwarders { 127.0.0.1; };\n};\n",
 		"/etc/bind/named.conf.root-hints": "zone \".\" {\n    type hint;\n    file \"/usr/share/dns/root.hints\";\n};\n",
 	}
@@ -272,6 +272,9 @@ func configureBind(ctx context.Context) error {
 		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 			return fmt.Errorf("write BIND configuration %s: %w", path, err)
 		}
+	}
+	if err := writeClusterForwarding(os.Getenv("DIB_CLUSTER_DOMAIN"), os.Getenv("DIB_UPSTREAM_NAMESERVERS")); err != nil {
+		return err
 	}
 	if _, err := os.Stat("/etc/bind/rndc.key"); os.IsNotExist(err) {
 		if err := run(ctx, "rndc-confgen", "-a", "-A", "hmac-sha256", "-c", "/etc/bind/rndc.key"); err != nil {
@@ -396,6 +399,30 @@ func updateBindForwarders(path, forwarders string) error {
 	}
 	updated := directive.ReplaceAll(contents, []byte("${1} "+forwarders+" ${2}"))
 	return writeAtomically(path, updated)
+}
+
+// writeClusterForwarding points a platform domain such as cluster.local at the
+// resolver the container was started with, which /etc/resolv.conf no longer names.
+// Those zones are unsigned, so DNSSEC validation has to be skipped for them.
+func writeClusterForwarding(domain, nameservers string) error {
+	zone, options := "", ""
+	if servers := strings.Fields(nameservers); domain != "" && len(servers) > 0 {
+		var forwarders strings.Builder
+		for _, server := range servers {
+			forwarders.WriteString(" " + server + ";")
+		}
+		zone = fmt.Sprintf("zone %q {\n    type forward;\n    forward only;\n    forwarders {%s };\n};\n", domain, forwarders.String())
+		options = fmt.Sprintf("validate-except { %q; };\n", domain)
+	}
+	for path, contents := range map[string]string{
+		"/etc/bind/named.conf.cluster":         zone,
+		"/etc/bind/named.conf.cluster-options": options,
+	} {
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			return fmt.Errorf("write BIND cluster configuration %s: %w", path, err)
+		}
+	}
+	return nil
 }
 
 func writeAtomically(path string, contents []byte) error {
