@@ -1,0 +1,63 @@
+# Rendered by tests/kubernetes/lab.sh: __RELEASE__, __CLIENT_IMAGE__ and
+# __STORK_IP__ are substituted before apply.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __RELEASE__-test-runner
+  labels:
+    app.kubernetes.io/name: domain-in-a-box
+    app.kubernetes.io/component: test-runner
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: domain-in-a-box
+        app.kubernetes.io/component: test-runner
+      annotations:
+        k8s.v1.cni.cncf.io/networks: '[{ "name": "dib-macvlan-client", "interface": "net1" }]'
+    spec:
+      restartPolicy: Never
+      hostname: domain-client
+      containers:
+        - name: test-runner
+          image: __CLIENT_IMAGE__
+          imagePullPolicy: Never
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
+          args: ["/usr/local/bin/test-runner", "run", "all"]
+          env:
+            - name: DOMAIN_CONTROLLER_IP
+              value: "192.168.3.1"
+            - name: STORK_SERVER_IP
+              value: "__STORK_IP__"
+            - name: DIB_DOMAIN
+              value: "DOMAIN"
+            - name: DIB_REALM
+              value: "DOMAIN.HOME.ARPA"
+            - name: DOMAIN_FQDN
+              value: "domain.home.arpa"
+            - name: DNS_DOMAIN
+              value: "domain.home.arpa"
+            - name: ADMIN_USER
+              value: "Administrator"
+            - name: ADMIN_PASSWORD
+              value: "P@ssw0rd"
+            - name: SERVER_HOSTNAME
+              value: "__RELEASE__-0"
+            - name: SUBNET
+              value: "192.168.3.0/24"
+            - name: GATEWAY
+              value: "192.168.3.254"
+            - name: DIB_DHCP_POOL
+              value: "192.168.3.100-192.168.3.199"
+            # Unlike the compose suite, the macvlan segment carries broadcast
+            # traffic, so a real lease can be requested and asserted.
+            - name: ENABLE_DHCP_CLIENT
+              value: "true"
+            - name: DIB_INTERFACE
+              value: "net1"
+            - name: DIB_DHCP_REQUIRE_LEASE
+              value: "true"

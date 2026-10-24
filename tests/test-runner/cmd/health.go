@@ -36,7 +36,7 @@ func runHealth(cmd *cobra.Command, args []string) error {
 			return network.CheckUDPPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "67", "6767"), 5*time.Second)
 		}},
 		{Name: "Stork REST service (port 80)", Run: func() error {
-			return network.CheckPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "80", "80"), 5*time.Second)
+			return network.CheckPort(cfg.StorkServerIP, servicePort(cfg.StorkServerIP, "80", "80"), 5*time.Second)
 		}},
 		{Name: "Samba Prometheus endpoint (port 9922)", Run: func() error {
 			return network.CheckPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "9922", "9922"), 5*time.Second)
