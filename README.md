@@ -181,14 +181,18 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
 
    The provided YAML defines a headless Service and a StatefulSet. The Service (`domain-server-svc`) is used for stable in-cluster DNS identity, while the `StatefulSet` requests the Multus/macvlan IP directly via pod annotations. The `StatefulSet` deploys a single replica of Domain-In-A-Box with persistent volumes via PVC templates.
 
-   To deploy Domain-In-A-Box, run:
+   Create the administrator password Secret before applying the manifest. Provide the password from a secret manager or shell environment; do not commit it in a manifest:
 
    ```bash
+   : "${DIB_DOMAIN_ADMIN_PASSWORD:?Set DIB_DOMAIN_ADMIN_PASSWORD}"
+   kubectl create namespace domain-in-a-box
+   kubectl -n domain-in-a-box create secret generic domain-in-a-box-secret \
+     --from-literal=domain-admin-password="$DIB_DOMAIN_ADMIN_PASSWORD"
    kubectl apply -f <your_kubernetes_file.yaml>
    ```
 
    **What to Customize:**  
-  - **Environment Variables:** Adjust the `DIB_REALM`, `DIB_DOMAIN`, `DIB_INTERFACE`, and other environment variables to suit your environment. `DIB_DOMAIN_ADMIN_PASSWORD` is referenced from the `domain-in-a-box-secret` Secret, and `DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART` should normally remain `false`. Metrics-related knobs are `DIB_SAMBA_METRICS_ENABLED` and `DIB_SAMBA_METRICS_PORT` (default `9922`).
+  - **Environment Variables:** Adjust the `DIB_REALM`, `DIB_DOMAIN`, `DIB_INTERFACE`, and other environment variables to suit your environment. Supply passwords via Kubernetes Secrets, and keep `DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART` set to `false` unless you explicitly want to overwrite the domain password on every restart. Metrics-related knobs are `DIB_SAMBA_METRICS_ENABLED` and `DIB_SAMBA_METRICS_PORT` (default `9922`).
    - **Multus/macvlan settings:** Update `master`, the static IP, the gateway, and the `routes` entry to match your LAN. This is especially important when the cluster keeps its default route on a different interface.
    - **Persistent Storage:** The sample starter values are `32Mi`-scale config PVCs, `1Gi` for `samba-data`, and `2Gi` for logs. Increase the `storage` values and set `storageClassName` as needed for your environment.
    - **Resources:** For a small lab cluster, a reasonable starting point is `500m` CPU / `1Gi` memory requested and up to `2` CPU / `4Gi` memory limited.
@@ -207,16 +211,26 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
 A Helm chart is provided under `charts/domain-in-a-box/` for installing Domain-In-A-Box on Kubernetes or RKE2 clusters.
 
 ```bash
+: "${DIB_DOMAIN_ADMIN_PASSWORD:?Set DIB_DOMAIN_ADMIN_PASSWORD}"
+: "${STORK_DATABASE_PASSWORD:?Set STORK_DATABASE_PASSWORD}"
+: "${DIB_LDAP_PASSWORD:?Set DIB_LDAP_PASSWORD}"
+kubectl create namespace domain-in-a-box
+kubectl -n domain-in-a-box create secret generic domain-in-a-box-credentials \
+  --from-literal=domain-admin-password="$DIB_DOMAIN_ADMIN_PASSWORD" \
+  --from-literal=stork-db-password="$STORK_DATABASE_PASSWORD" \
+  --from-literal=stork-ldap-password="$DIB_LDAP_PASSWORD"
+
 helm install domain-in-a-box ./charts/domain-in-a-box \
-  --namespace domain-in-a-box --create-namespace \
-  --set domain.initialAdminPassword="YourStrongPassword123!" \
+  --namespace domain-in-a-box \
   --set multus.address="192.168.1.1/24" \
   --set multus.gateway="192.168.1.254"
 ```
 
+Create the Secret before installing the chart and provide unique, strong password values through your secret manager or shell environment. The chart does not create credentials or ship with default passwords. Set `credentials.secretName` and the three key values if you use a differently named Secret.
+
 #### External PostgreSQL Integration (Optional)
 
-If your Kubernetes cluster already runs an external PostgreSQL cluster (such as a shared database instance in RKE2 used by Gitea or other apps), you can configure Stork to use the external database instead of the internal container instance:
+If your Kubernetes cluster already runs an external PostgreSQL cluster (such as a shared database instance in RKE2 used by Gitea or other apps), you can configure Stork to use the external database instead of the chart-managed PostgreSQL StatefulSet:
 
 ```bash
 helm install domain-in-a-box ./charts/domain-in-a-box \
@@ -263,7 +277,7 @@ The `docker-compose.yml` file includes several settings that you might want to a
 - **Environment Variables:**  
   - **DIB_REALM:** Specify your Active Directory Kerberos realm (e.g., `"DOMAIN.HOME.ARPA"`).
   - **DIB_DOMAIN:** Define your short domain name (e.g., `"DOMAIN"`).
-  - **DIB_DOMAIN_ADMIN_PASSWORD:** Set the domain administrator password used during provisioning.
+  - **DIB_DOMAIN_ADMIN_PASSWORD:** Set a unique domain administrator password used during provisioning.
   - **DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:** Set to `true` only if you want container restarts to re-sync the Administrator password from the environment.
   - **DIB_INTERFACE:** Specify the interface to be used by your domain controller (e.g., `"eth0"`).
   - **DIB_DHCP_POOL:** Specify the range of IP addresses to be leased (e.g., `"192.168.1.100-192.168.1.199"`); updates are applied on restart.
@@ -271,8 +285,8 @@ The `docker-compose.yml` file includes several settings that you might want to a
   - **DIB_SAMBA_METRICS_ENABLED:** Enables `smb_prometheus_endpoint` (default `true`).
   - **DIB_SAMBA_METRICS_PORT:** Samba Prometheus exporter port (default `9922`).
   - **DIB_BOOTSTRAP_TIMEOUT_SECONDS:** Maximum time for post-start dependency checks before bootstrap fails (default `120`).
-  - **DIB_EMBEDDED_POSTGRES:** Set to `false` when connecting Stork to an external PostgreSQL instance (default `true`).
-  - **STORK_DATABASE_HOST / STORK_DATABASE_PORT:** Connection details for Stork's PostgreSQL database (default `127.0.0.1:5432`).
+  - **Stork integration:** The core image does not include a PostgreSQL server or Stork server. Leave `STORK_SERVER_HOST` unset to run the core-only Docker CLI deployment without Stork. Stork can be enabled later by configuring its server and PostgreSQL endpoint with the `STORK_*` settings and restarting; agent account setup and registration then run as a separate one-time bootstrap.
+  - **STORK_DATABASE_HOST / STORK_DATABASE_PORT:** Connection details for the PostgreSQL database used by Stork. In Docker Compose the database service is `postgres`; set these explicitly when using an external database.
   - **STORK_DATABASE_NAME / STORK_DATABASE_USER_NAME / STORK_DATABASE_PASSWORD:** Stork database authentication credentials.
 
   Existing Samba, BIND, Kea, and Stork configuration files are preserved. On restart, Domain-In-A-Box reconciles only its managed values: the Samba metrics setting and optional Administrator password, BIND forwarders, and the Kea DHCP pool for subnet ID `1`.
@@ -292,7 +306,7 @@ The `docker-compose.yml` file includes several settings that you might want to a
   - `kea-config` → `/etc/kea`
   - `kea-data` → `/var/lib/kea`
   - `stork-config` → `/etc/stork`
-  - `stork-data` → `/var/lib/stork-agent`
+  - `stork-data` → `/var/lib/stork-agent` (agent certificates, private key, token, and bootstrap markers). Bootstrap transfers ownership of the registered credentials to the `stork-agent` user before marking registration complete.
   - `samba-data` → `/var/lib/samba` (also persists `/etc/samba` via startup symlink)
   - `log-data` → `/var/log`  
   *You can change these to host bind mounts if you prefer direct access to the underlying directories.*
@@ -355,7 +369,7 @@ services:
     environment:
       DIB_REALM: "${DIB_REALM:-DOMAIN.HOME.ARPA}"
       DIB_DOMAIN: "${DIB_DOMAIN:-DOMAIN}"
-      DIB_DOMAIN_ADMIN_PASSWORD: "${DIB_DOMAIN_ADMIN_PASSWORD:-ChangeMeNow123!}"
+      DIB_DOMAIN_ADMIN_PASSWORD: "${DIB_DOMAIN_ADMIN_PASSWORD:?Set DIB_DOMAIN_ADMIN_PASSWORD in .env}"
       DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART: "${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
       DIB_INTERFACE: "${DIB_INTERFACE:-eth0}"
       DIB_DHCP_POOL: "${DIB_DHCP_POOL:-192.168.1.100-192.168.1.199}"
@@ -398,7 +412,7 @@ volumes:
 ```
 ## 4. Docker CLI
 
-Deploying Domain-In-A-Box directly via the Docker CLI is ideal for quick testing or lightweight deployments where additional orchestration features (like those provided by Compose or Kubernetes) are not required. This section outlines how to set up the necessary network, run the container with the required options, and manage the deployment.
+Deploying Domain-In-A-Box directly via the Docker CLI runs the core AD/DNS/DHCP/NTP services without Stork. The core image does not bundle a PostgreSQL or Stork server; use Docker Compose or provide a separately configured Stork server and database when you need monitoring. This section outlines how to set up the necessary network, run the container with the required options, and manage the deployment.
 
 ### Prerequisites
 
@@ -521,4 +535,4 @@ docker run -d \
 - **Samba AD DC:** `smb_prometheus_endpoint` is enabled by default and exports SMB metrics from `smbprofile.tdb` on port `9922`.
 - **BIND9:** A metrics endpoint is available on port `9119`.
 - **Kea:** A metrics endpoint is available on port `9547`.
-- **Stork UI:** Stork server is reachable on port `80`. For HTTPS access on port `443`, you'll need to provide custom TLS configuration.
+- **Stork UI:** When deployed with the separate Stork server, the UI is reachable on port `80`. For HTTPS access on port `443`, you'll need to provide custom TLS configuration.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	platformlog "github.com/GMouzourou/domain-in-a-box/internal/platform/log"
+	"github.com/GMouzourou/domain-in-a-box/internal/platform/process"
 	"github.com/GMouzourou/domain-in-a-box/internal/platform/wait"
 )
 
@@ -100,7 +101,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		return err
 	}
 
-	return run(ctx,
+	return process.Replace(
 		filepath.Join("/usr/lib/postgresql", version, "bin/postgres"),
 		"-D", filepath.Join("/var/lib/postgresql", version, "main"),
 		"-c", "config_file="+filepath.Join("/etc/postgresql", version, "main", "postgresql.conf"),

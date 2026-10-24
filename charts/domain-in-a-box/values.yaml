@@ -17,11 +17,13 @@ domain:
   dhcpPool: "192.168.1.100-192.168.1.199"
   dnsForwarders: "1.1.1.1; 8.8.8.8;"
   syncPasswordOnRestart: false
-  # Initial domain admin password (used if secret is not provided)
-  initialAdminPassword: "ChangeMeNow123!"
-  adminPasswordSecret:
-    name: ""
-    key: "domain-admin-password"
+
+credentials:
+  # Create this Kubernetes Secret before installing the chart.
+  secretName: "domain-in-a-box-credentials"
+  adminPasswordKey: "domain-admin-password"
+  databasePasswordKey: "stork-db-password"
+  ldapPasswordKey: "stork-ldap-password"
 
 metrics:
   enabled: true
@@ -44,8 +46,6 @@ multus:
   gateway: "192.168.1.254"
 
 database:
-  initialPassword: "storkpass123!"
-  initialLDAPPassword: "ChangeMeLDAP123!"
   # Set external.enabled to true to connect Stork to an external PostgreSQL cluster (e.g. in RKE2)
   external:
     enabled: false

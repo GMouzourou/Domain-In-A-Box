@@ -9,11 +9,14 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/GMouzourou/domain-in-a-box/internal/platform/bootstrap"
 	platformlog "github.com/GMouzourou/domain-in-a-box/internal/platform/log"
+	"github.com/GMouzourou/domain-in-a-box/internal/platform/process"
 	"github.com/GMouzourou/domain-in-a-box/internal/platform/wait"
 )
 
@@ -71,15 +74,24 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 		return nil
 	}
 
-	if os.Getenv("INIT_DOMAIN") == "TRUE" {
+	if os.Getenv("STORK_SERVER_HOST") == "" {
+		r.log.Infof("Stork is not configured; skipping agent bootstrap")
+		return nil
+	}
+
+	if os.Getenv("DIB_STORK_BOOTSTRAP_PENDING") == "TRUE" {
 		ldapPassword, err := requiredEnvironment("DIB_LDAP_PASSWORD")
 		if err != nil {
 			return err
 		}
-		if err := run(ctx, "samba-tool", "user", "create", "ldap-search-user", "--description=Read-only LDAP Bind User", ldapPassword); err != nil {
+		if err := bootstrap.RunOnce(ctx, "/var/lib/samba/.dib-ldap-search-user-created", func(ctx context.Context) error {
+			return run(ctx, "samba-tool", "user", "create", "ldap-search-user", "--description=Read-only LDAP Bind User", ldapPassword)
+		}); err != nil {
 			return err
 		}
-		if err := run(ctx, "samba-tool", "user", "setexpiry", "ldap-search-user", "--noexpiry"); err != nil {
+		if err := bootstrap.RunOnce(ctx, "/var/lib/samba/.dib-ldap-search-user-expiry-set", func(ctx context.Context) error {
+			return run(ctx, "samba-tool", "user", "setexpiry", "ldap-search-user", "--noexpiry")
+		}); err != nil {
 			return err
 		}
 	}
@@ -118,13 +130,18 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := run(ctx, "stork-agent", "register", "--server-url="+scheme+"://"+address+":"+port, "--server-token="+serverToken, "--agent-host="+agentHost, "--agent-port=8081", "--non-interactive"); err != nil {
+	return registerStorkAgent(ctx, "/var/lib/stork-agent", "--server-url="+scheme+"://"+address+":"+port, "--server-token="+serverToken, "--agent-host="+agentHost, "--agent-port=8081", "--non-interactive")
+}
+
+func registerStorkAgent(ctx context.Context, stateDir string, args ...string) error {
+	if err := run(ctx, "stork-agent", append([]string{"register"}, args...)...); err != nil {
 		return err
 	}
-	if err := run(ctx, "chown", "-R", "stork-agent:root", "/var/lib/stork-agent/certs/", "/var/lib/stork-agent/tokens/"); err != nil {
+	// Registration runs as root, but the agent reads its credentials as stork-agent.
+	if err := run(ctx, "chown", "-R", "stork-agent:root", stateDir); err != nil {
 		return err
 	}
-	return os.WriteFile("/var/lib/stork-agent/.stork-agent-registered", nil, 0o644)
+	return os.WriteFile(filepath.Join(stateDir, ".stork-agent-registered"), nil, 0o644)
 }
 
 func (r *Runner) Validate(context.Context) error {
@@ -151,7 +168,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			r.log.Infof("Samba metrics are disabled")
 			return nil
 		}
-		return run(ctx, "smb_prometheus_endpoint", "-a", "0.0.0.0", "-p", sambaMetricsPort(), "/var/cache/samba/smbprofile.tdb")
+		return process.Replace("smb_prometheus_endpoint", "-a", "0.0.0.0", "-p", sambaMetricsPort(), "/var/cache/samba/smbprofile.tdb")
 	case "stork-server":
 		if err := configureStorkServer(ctx); err != nil {
 			return err
@@ -167,12 +184,16 @@ func (r *Runner) Run(ctx context.Context) error {
 		if err := waitFor(ctx, "PostgreSQL", net.JoinHostPort(dbHost, dbPort)); err != nil {
 			return err
 		}
-		return run(ctx, "/usr/bin/stork-server", "--use-env-file")
+		return process.Replace("/usr/bin/stork-server", "--use-env-file")
 	case "stork-agent":
+		if os.Getenv("STORK_SERVER_HOST") == "" {
+			r.log.Infof("Stork is not configured; agent is disabled")
+			return nil
+		}
 		if err := waitForFile(ctx, "/var/lib/stork-agent/.stork-agent-registered"); err != nil {
 			return err
 		}
-		return run(ctx, "/usr/bin/stork-agent", "--use-env-file")
+		return process.Replace("/usr/bin/stork-agent", "--use-env-file")
 	default:
 		return fmt.Errorf("DIB_OBSERVABILITY_COMPONENT must be samba-metrics, stork-server, or stork-agent")
 	}
@@ -312,8 +333,14 @@ func bootstrapAttempts() int {
 }
 
 func writeStorkServerEnvironment() error {
-	const path = "/etc/stork/server.env"
+	return writeStorkServerEnvironmentAt("/etc/stork/server.env")
+}
+
+func writeStorkServerEnvironmentAt(path string) error {
 	if _, err := os.Stat(path); err == nil {
+		if err := os.Chmod(path, 0o600); err != nil {
+			return fmt.Errorf("restrict Stork environment file permissions: %w", err)
+		}
 		return nil
 	} else if !os.IsNotExist(err) {
 		return err
@@ -411,7 +438,7 @@ func writeStorkServerEnvironment() error {
 		"STORK_SERVER_HOOK_LDAP_OBJECT_CLASS_GROUP=group",
 		"",
 	)
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600)
 }
 
 func writeStorkAgentEnvironment() error {

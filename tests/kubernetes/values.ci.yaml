@@ -19,7 +19,6 @@ domain:
   dhcpPool: "192.168.3.100-192.168.3.199"
   dnsForwarders: "1.1.1.1; 8.8.8.8;"
   syncPasswordOnRestart: false
-  initialAdminPassword: "P@ssw0rd"
 
 metrics:
   enabled: true
@@ -34,8 +33,11 @@ multus:
   storkServerNetworkName: "dib-macvlan-stork"
 
 database:
-  initialPassword: "StorkPostgresTestPassword123!"
-  initialLDAPPassword: "StorkLDAPTestPassword123!"
+  external:
+    enabled: false
+
+credentials:
+  secretName: "dib-credentials"
 
 persistence:
   enabled: true

@@ -40,8 +40,8 @@ spec:
             - name: STORK_LDAP_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "domain-in-a-box.fullname" . }}-secret
-                  key: stork-ldap-password
+                  name: {{ .Values.credentials.secretName | quote }}
+                  key: {{ .Values.credentials.ldapPasswordKey | quote }}
             - name: STORK_DATABASE_HOST
               value: {{ .Values.database.external.enabled | ternary .Values.database.external.host (printf "%s-postgresql" (include "domain-in-a-box.fullname" .)) | quote }}
             - name: STORK_DATABASE_PORT
@@ -53,8 +53,13 @@ spec:
             - name: STORK_DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.database.external.enabled | ternary (default "" .Values.database.external.passwordSecret.name) (printf "%s-secret" (include "domain-in-a-box.fullname" .)) }}
-                  key: {{ .Values.database.external.enabled | ternary (default "password" .Values.database.external.passwordSecret.key) "stork-db-password" }}
+                  {{ if .Values.database.external.enabled }}
+                  name: {{ required "database.external.passwordSecret.name is required when external PostgreSQL is enabled" .Values.database.external.passwordSecret.name | quote }}
+                  key: {{ .Values.database.external.passwordSecret.key | quote }}
+                  {{ else }}
+                  name: {{ .Values.credentials.secretName | quote }}
+                  key: {{ .Values.credentials.databasePasswordKey | quote }}
+                  {{ end }}
           ports:
             - name: stork-http
               containerPort: 80

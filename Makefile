@@ -156,7 +156,7 @@ hadolint:
 
 docker-lint:
 	@echo "Validating docker-compose files..."
-	$(COMPOSE) -f docker-compose.yml config > /dev/null
+	DIB_DOMAIN_ADMIN_PASSWORD=LintOnly-Admin123! DIB_LDAP_PASSWORD=LintOnly-Ldap123! STORK_DATABASE_PASSWORD=LintOnly-Database123! $(COMPOSE) -f docker-compose.yml config > /dev/null
 	$(COMPOSE) -f tests/docker-compose.test.yml config > /dev/null
 	@echo "✓ Docker Compose files valid"
 
@@ -265,5 +265,4 @@ docker-prune:
 	@echo "Pruning Docker resources..."
 	docker system prune -f
 	@echo "✓ Docker resources pruned"
-
 

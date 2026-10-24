@@ -88,7 +88,7 @@ jobs:
 
       - name: Validate deployment manifests
         run: |
-          docker compose -f docker-compose.yml config >/dev/null
+          DIB_DOMAIN_ADMIN_PASSWORD=LintOnly-Admin123! DIB_LDAP_PASSWORD=LintOnly-Ldap123! STORK_DATABASE_PASSWORD=LintOnly-Database123! docker compose -f docker-compose.yml config >/dev/null
           docker compose -f tests/docker-compose.test.yml config >/dev/null
           helm lint charts/domain-in-a-box
           helm template dib charts/domain-in-a-box >/dev/null

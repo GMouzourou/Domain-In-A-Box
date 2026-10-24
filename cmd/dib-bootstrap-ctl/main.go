@@ -28,6 +28,11 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	corePending := os.Getenv("DIB_BOOTSTRAP_PENDING") == "TRUE"
+	storkPending := os.Getenv("DIB_STORK_BOOTSTRAP_PENDING") == "TRUE"
+	if !corePending && !storkPending {
+		logger.Infof("one-time bootstrap is complete; refreshing network credentials")
+	}
 
 	pgHost := os.Getenv("STORK_DATABASE_HOST")
 	if pgHost == "" {
@@ -38,36 +43,60 @@ func run(ctx context.Context) error {
 		pgPort = "5432"
 	}
 
-	for _, dependency := range []struct {
-		name    string
-		address string
-	}{
-		{name: "BIND", address: net.JoinHostPort(requiredEnv("IP"), "5353")},
-		{name: "Samba LDAP", address: "127.0.0.1:389"},
-		{name: "Samba KDC", address: "127.0.0.1:88"},
-		{name: "PostgreSQL", address: net.JoinHostPort(pgHost, pgPort)},
-	} {
+	dependencies := bootstrapDependencies(requiredEnv("IP"), corePending, storkPending, pgHost, pgPort)
+	for _, dependency := range dependencies {
 		logger.Infof("waiting for %s", dependency.name)
 		if err := waitForTCP(ctx, dependency.name, dependency.address, timeout); err != nil {
 			return err
 		}
 	}
 
-	logger.Infof("running identity bootstrap")
-	if err := runCommand(ctx, "/usr/local/bin/dib-identity-core-ctl", "bootstrap"); err != nil {
-		return err
+	if corePending {
+		logger.Infof("running identity bootstrap")
+		if err := runCommand(ctx, "/usr/local/bin/dib-identity-core-ctl", "bootstrap"); err != nil {
+			return err
+		}
 	}
 
 	logger.Infof("running network bootstrap")
 	if err := runCommand(ctx, "/usr/local/bin/dib-network-core-ctl", "bootstrap"); err != nil {
 		return err
 	}
+	if corePending {
+		if err := os.WriteFile("/var/lib/samba/.dib-bootstrap-complete", nil, 0o600); err != nil {
+			return fmt.Errorf("mark core bootstrap complete: %w", err)
+		}
+	}
 
-	logger.Infof("running observability bootstrap")
-	if err := runCommand(ctx, "/usr/local/bin/dib-observability-ctl", "bootstrap"); err != nil {
-		return err
+	if storkPending {
+		logger.Infof("running Stork agent bootstrap")
+		if err := runCommand(ctx, "/usr/local/bin/dib-observability-ctl", "bootstrap"); err != nil {
+			return err
+		}
+		if err := os.WriteFile("/var/lib/stork-agent/.dib-bootstrap-complete", nil, 0o600); err != nil {
+			return fmt.Errorf("mark Stork bootstrap complete: %w", err)
+		}
 	}
 	return nil
+}
+
+type dependency struct {
+	name    string
+	address string
+}
+
+func bootstrapDependencies(ip string, corePending, storkPending bool, pgHost, pgPort string) []dependency {
+	dependencies := []dependency{
+		{name: "Samba LDAP", address: "127.0.0.1:389"},
+		{name: "Samba KDC", address: "127.0.0.1:88"},
+	}
+	if corePending {
+		dependencies = append([]dependency{{name: "BIND", address: net.JoinHostPort(ip, "5353")}}, dependencies...)
+	}
+	if storkPending {
+		dependencies = append(dependencies, dependency{name: "PostgreSQL", address: net.JoinHostPort(pgHost, pgPort)})
+	}
+	return dependencies
 }
 
 func runCommand(ctx context.Context, name string, args ...string) error {

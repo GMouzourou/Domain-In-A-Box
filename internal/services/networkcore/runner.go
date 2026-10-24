@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GMouzourou/domain-in-a-box/internal/platform/bootstrap"
 	platformlog "github.com/GMouzourou/domain-in-a-box/internal/platform/log"
+	"github.com/GMouzourou/domain-in-a-box/internal/platform/process"
 	"github.com/GMouzourou/domain-in-a-box/internal/platform/wait"
 )
 
@@ -50,14 +52,21 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if os.Getenv("INIT_DOMAIN") == "TRUE" {
-		for _, command := range [][]string{
-			{"samba-tool", "user", "create", "keaddns", "--description=Kea DHCP DDNS GSS-TSIG service account", "--random-password"},
-			{"samba-tool", "user", "setexpiry", "keaddns", "--noexpiry"},
-			{"samba-tool", "group", "addmembers", "DnsAdmins", "keaddns"},
-			{"samba-tool", "domain", "exportkeytab", "/var/lib/kea/keaddns.keytab", "--principal=keaddns@" + realm},
-		} {
-			if err := run(ctx, command[0], command[1:]...); err != nil {
+	if os.Getenv("DIB_BOOTSTRAP_PENDING") == "TRUE" {
+		steps := []struct {
+			marker  string
+			command []string
+		}{
+			{"/var/lib/samba/.dib-keaddns-user-created", []string{"samba-tool", "user", "create", "keaddns", "--description=Kea DHCP DDNS GSS-TSIG service account", "--random-password"}},
+			{"/var/lib/samba/.dib-keaddns-expiry-set", []string{"samba-tool", "user", "setexpiry", "keaddns", "--noexpiry"}},
+			{"/var/lib/samba/.dib-keaddns-group-added", []string{"samba-tool", "group", "addmembers", "DnsAdmins", "keaddns"}},
+			{"/var/lib/kea/.dib-keaddns-keytab-exported", []string{"samba-tool", "domain", "exportkeytab", "/var/lib/kea/keaddns.keytab", "--principal=keaddns@" + realm}},
+		}
+		for _, step := range steps {
+			step := step
+			if err := bootstrap.RunOnce(ctx, step.marker, func(ctx context.Context) error {
+				return run(ctx, step.command[0], step.command[1:]...)
+			}); err != nil {
 				return err
 			}
 		}
@@ -83,7 +92,37 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 	}
 
 	cronLine := "0 */4 * * * KRB5CCNAME=FILE:/run/kea/keaddns.ccache /usr/bin/kinit -kt /var/lib/kea/keaddns.keytab keaddns@" + realm
-	return run(ctx, "/bin/sh", "-c", "(crontab -u _kea -l 2>/dev/null; echo \""+cronLine+"\") | crontab -u _kea -")
+	return ensureCronEntry(ctx, "_kea", cronLine)
+}
+
+func ensureCronEntry(ctx context.Context, user, line string) error {
+	list := exec.CommandContext(ctx, "crontab", "-u", user, "-l")
+	current, err := list.Output()
+	if err != nil {
+		if exitError, ok := err.(*exec.ExitError); !ok || exitError.ExitCode() != 1 {
+			return fmt.Errorf("read %s crontab: %w", user, err)
+		}
+		current = nil
+	}
+
+	var updated strings.Builder
+	for _, existing := range strings.Split(string(current), "\n") {
+		if !strings.Contains(existing, "/var/lib/kea/keaddns.keytab") && existing != "" {
+			updated.WriteString(existing)
+			updated.WriteByte('\n')
+		}
+	}
+	updated.WriteString(line)
+	updated.WriteByte('\n')
+
+	install := exec.CommandContext(ctx, "crontab", "-u", user, "-")
+	install.Stdin = strings.NewReader(updated.String())
+	install.Stdout = os.Stdout
+	install.Stderr = os.Stderr
+	if err := install.Run(); err != nil {
+		return fmt.Errorf("install %s crontab entry: %w", user, err)
+	}
+	return nil
 }
 
 func (r *Runner) Validate(ctx context.Context) error {
@@ -103,13 +142,13 @@ func (r *Runner) Validate(ctx context.Context) error {
 func (r *Runner) Run(ctx context.Context) error {
 	switch os.Getenv("DIB_NETWORK_COMPONENT") {
 	case "chrony":
-		return run(ctx, "/usr/sbin/chronyd", "-n", "-x", "-f", "/etc/chrony/chrony.conf")
+		return process.Replace("/usr/sbin/chronyd", "-n", "-x", "-f", "/etc/chrony/chrony.conf")
 	case "bind":
-		return run(ctx, "/usr/sbin/named", "-f", "-c", "/etc/bind/named.conf")
+		return process.Replace("/usr/sbin/named", "-f", "-c", "/etc/bind/named.conf")
 	case "kea-dhcp4":
-		return run(ctx, "/usr/sbin/kea-dhcp4", "-c", "/etc/kea/kea-dhcp4.conf")
+		return process.Replace("/usr/sbin/kea-dhcp4", "-c", "/etc/kea/kea-dhcp4.conf")
 	case "kea-dhcp-ddns":
-		return run(ctx, "/usr/sbin/kea-dhcp-ddns", "-c", "/etc/kea/kea-dhcp-ddns.conf")
+		return process.Replace("/usr/sbin/kea-dhcp-ddns", "-c", "/etc/kea/kea-dhcp-ddns.conf")
 	default:
 		return fmt.Errorf("DIB_NETWORK_COMPONENT must be one of chrony, bind, kea-dhcp4, or kea-dhcp-ddns")
 	}

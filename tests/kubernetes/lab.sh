@@ -150,6 +150,11 @@ cmd_deploy() {
 
     kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
     render "${SCRIPT_DIR}/network-attachments.yaml" | kubectl -n "${NAMESPACE}" apply -f -
+    kubectl -n "${NAMESPACE}" create secret generic dib-credentials \
+        --from-literal=domain-admin-password='P@ssw0rd' \
+        --from-literal=stork-db-password='StorkPostgresTestPassword123!' \
+        --from-literal=stork-ldap-password='StorkLDAPTestPassword123!' \
+        --dry-run=client -o yaml | kubectl apply -f -
 
     log "Installing chart"
     helm upgrade --install "${RELEASE}" "${REPO_ROOT}/charts/domain-in-a-box" \
@@ -158,7 +163,30 @@ cmd_deploy() {
         --wait=false
 
     log "Waiting for the domain controller to become ready"
-    kubectl -n "${NAMESPACE}" rollout status "statefulset/${RELEASE}" --timeout=900s
+    if ! kubectl -n "${NAMESPACE}" rollout status "statefulset/${RELEASE}" --timeout=900s; then
+        echo "Domain controller did not become ready; collecting pod diagnostics" >&2
+        kubectl -n "${NAMESPACE}" describe pod "${RELEASE}-0" || true
+        kubectl -n "${NAMESPACE}" logs "${RELEASE}-0" --all-containers=true --tail=-1 || true
+        kubectl -n "${NAMESPACE}" exec "${RELEASE}-0" -- \
+            python3 -c '
+import socket, sys
+
+failed = []
+for port in (389, 9119, 9547):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            pass
+    except OSError:
+        failed.append(port)
+
+print(
+    "Readiness ports not accepting connections: " + ", ".join(map(str, failed))
+    if failed else "All readiness ports accept connections"
+)
+sys.exit(bool(failed))
+' || true
+        return 1
+    fi
 }
 
 cmd_test() {
@@ -201,7 +229,7 @@ cmd_logs() {
     kubectl -n "${NAMESPACE}" get all -o wide > "${ARTIFACT_DIR}/resources.txt" 2>&1 || true
     kubectl -n "${NAMESPACE}" describe pods > "${ARTIFACT_DIR}/describe-pods.txt" 2>&1 || true
     kubectl -n "${NAMESPACE}" get events --sort-by=.lastTimestamp > "${ARTIFACT_DIR}/events.txt" 2>&1 || true
-    kubectl -n "${NAMESPACE}" logs "statefulset/${RELEASE}" --tail=-1 > "${ARTIFACT_DIR}/domain-controller.log" 2>&1 || true
+    kubectl -n "${NAMESPACE}" logs "${RELEASE}-0" --all-containers=true --tail=-1 > "${ARTIFACT_DIR}/domain-controller.log" 2>&1 || true
     kubectl -n "${NAMESPACE}" logs "deployment/${RELEASE}-stork-server" --tail=-1 > "${ARTIFACT_DIR}/stork-server.log" 2>&1 || true
     kubectl -n "${NAMESPACE}" logs "job/${RELEASE}-test-runner" --tail=-1 > "${ARTIFACT_DIR}/test-runner.log" 2>&1 || true
     kubectl -n kube-system logs daemonset/kube-multus-ds --tail=-1 > "${ARTIFACT_DIR}/multus.log" 2>&1 || true

@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GMouzourou/domain-in-a-box/internal/platform/bootstrap"
 	platformlog "github.com/GMouzourou/domain-in-a-box/internal/platform/log"
+	"github.com/GMouzourou/domain-in-a-box/internal/platform/process"
 	"github.com/GMouzourou/domain-in-a-box/internal/platform/wait"
 )
 
@@ -27,8 +29,12 @@ func (r *Runner) Name() string { return "identity-core" }
 
 func (r *Runner) Configure(ctx context.Context) error {
 	if os.Getenv("INIT_DOMAIN") == "TRUE" {
-		if err := provision(ctx); err != nil {
-			return err
+		if _, err := os.Stat("/etc/samba/smb.conf"); os.IsNotExist(err) {
+			if err := provision(ctx); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return fmt.Errorf("check Samba configuration: %w", err)
 		}
 	}
 	if err := configureKerberos(ctx); err != nil {
@@ -51,7 +57,7 @@ func (r *Runner) Configure(ctx context.Context) error {
 }
 
 func (r *Runner) Bootstrap(ctx context.Context) error {
-	if os.Getenv("INIT_DOMAIN") != "TRUE" {
+	if os.Getenv("DIB_BOOTSTRAP_PENDING") != "TRUE" {
 		return nil
 	}
 	reverseZone, err := environment("REVERSE_ZONE")
@@ -79,13 +85,19 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 		return fmt.Errorf("IP must be an IPv4 address, got %q", address)
 	}
 	credentials := "Administrator%" + password
-	if err := run(ctx, "samba-tool", "domain", "level", "raise", "--domain-level=2016", "--forest-level=2016"); err != nil {
+	if err := bootstrap.RunOnce(ctx, "/var/lib/samba/.dib-domain-level-raised", func(ctx context.Context) error {
+		return run(ctx, "samba-tool", "domain", "level", "raise", "--domain-level=2016", "--forest-level=2016")
+	}); err != nil {
 		return err
 	}
-	if err := run(ctx, "samba-tool", "dns", "zonecreate", "127.0.0.1", reverseZone, "-U", credentials); err != nil {
+	if err := bootstrap.RunOnce(ctx, "/var/lib/samba/.dib-reverse-zone-created", func(ctx context.Context) error {
+		return run(ctx, "samba-tool", "dns", "zonecreate", "127.0.0.1", reverseZone, "-U", credentials)
+	}); err != nil {
 		return err
 	}
-	if err := run(ctx, "samba-tool", "dns", "add", "127.0.0.1", reverseZone, parts[3], "PTR", hostname+"."+dnsDomain, "-U", credentials); err != nil {
+	if err := bootstrap.RunOnce(ctx, "/var/lib/samba/.dib-reverse-ptr-created", func(ctx context.Context) error {
+		return run(ctx, "samba-tool", "dns", "add", "127.0.0.1", reverseZone, parts[3], "PTR", hostname+"."+dnsDomain, "-U", credentials)
+	}); err != nil {
 		return err
 	}
 	if len(hostname) <= 15 {
@@ -95,7 +107,9 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read Samba NetBIOS name: %w", err)
 	}
-	return run(ctx, "samba-tool", "dns", "add", "127.0.0.1", dnsDomain, hostname, "CNAME", strings.TrimSpace(string(netbiosName))+"."+dnsDomain, "-U", credentials)
+	return bootstrap.RunOnce(ctx, "/var/lib/samba/.dib-host-cname-created", func(ctx context.Context) error {
+		return run(ctx, "samba-tool", "dns", "add", "127.0.0.1", dnsDomain, hostname, "CNAME", strings.TrimSpace(string(netbiosName))+"."+dnsDomain, "-U", credentials)
+	})
 }
 
 func (r *Runner) Validate(ctx context.Context) error {
@@ -103,7 +117,7 @@ func (r *Runner) Validate(ctx context.Context) error {
 }
 
 func (r *Runner) Run(ctx context.Context) error {
-	return run(ctx, "/usr/sbin/samba", "-i")
+	return process.Replace("/usr/sbin/samba", "-i")
 }
 
 func (r *Runner) Health(ctx context.Context) error {

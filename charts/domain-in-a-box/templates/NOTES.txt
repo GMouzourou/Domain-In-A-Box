@@ -1,5 +1,15 @@
 Domain-In-A-Box has been deployed!
 
+Ensure Secret {{ .Values.credentials.secretName }} exists and contains keys:
+  {{ .Values.credentials.adminPasswordKey }}
+  {{ .Values.credentials.ldapPasswordKey }}
+{{- if not .Values.database.external.enabled }}
+  {{ .Values.credentials.databasePasswordKey }}
+{{- else }}
+External PostgreSQL password Secret: {{ .Values.database.external.passwordSecret.name }}
+  key: {{ .Values.database.external.passwordSecret.key }}
+{{- end }}
+
 1. Active Directory Domain: {{ .Values.domain.realm }}
    Domain Name (NetBIOS):   {{ .Values.domain.name }}
    DHCP Pool:               {{ .Values.domain.dhcpPool }}
@@ -20,7 +30,7 @@ Domain-In-A-Box has been deployed!
    Host: {{ .Values.database.external.host }}:{{ .Values.database.external.port }}
    Database: {{ .Values.database.external.name }}
    {{- else }}
-   Stork is using the internal PostgreSQL service managed within the container.
+   Stork is using the internal PostgreSQL StatefulSet.
    {{- end }}
 
 4. Check Deployment Status:

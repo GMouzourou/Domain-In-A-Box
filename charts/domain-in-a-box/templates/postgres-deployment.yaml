@@ -47,8 +47,8 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "domain-in-a-box.fullname" . }}-secret
-                  key: stork-db-password
+                  name: {{ .Values.credentials.secretName | quote }}
+                  key: {{ .Values.credentials.databasePasswordKey | quote }}
           ports:
             - name: postgresql
               containerPort: 5432

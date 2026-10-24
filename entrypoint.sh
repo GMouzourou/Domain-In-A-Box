@@ -28,6 +28,16 @@ IP=$(ip addr show dev "${DIB_INTERFACE}" | awk '/inet / { split($2, a, "/"); pri
 GATEWAY=$(ip route show dev "${DIB_INTERFACE}" | awk '/via/ {print $3; exit}')
 INIT_DOMAIN=FALSE
 PROVISION_SENTINEL=/var/lib/samba/.dib-provisioned
+BOOTSTRAP_SENTINEL=/var/lib/samba/.dib-bootstrap-complete
+DIB_BOOTSTRAP_PENDING=FALSE
+if [ ! -f "${BOOTSTRAP_SENTINEL}" ]; then
+    DIB_BOOTSTRAP_PENDING=TRUE
+fi
+STORK_BOOTSTRAP_SENTINEL=/var/lib/stork-agent/.dib-bootstrap-complete
+DIB_STORK_BOOTSTRAP_PENDING=FALSE
+if [ -n "${STORK_SERVER_HOST:-}" ] && [ ! -f "${STORK_BOOTSTRAP_SENTINEL}" ]; then
+    DIB_STORK_BOOTSTRAP_PENDING=TRUE
+fi
 
 if [ -z "${IP}" ]; then
     echo "Failed to determine an IPv4 address for DIB_INTERFACE=${DIB_INTERFACE}. Check that the interface exists and is configured." >&2
@@ -99,14 +109,16 @@ export SUBNET
 export REVERSE_ZONE
 export GATEWAY
 export DIB_UPSTREAM_NAMESERVERS="${UPSTREAM_NAMESERVERS}"
+export DIB_BOOTSTRAP_PENDING
+export DIB_STORK_BOOTSTRAP_PENDING
 
 # Configure services through their ownership boundaries.
 dib-identity-core-ctl configure
+dib-network-core-ctl configure
+dib-observability-ctl configure
 if [ "$INIT_DOMAIN" = "TRUE" ]; then
     touch "${PROVISION_SENTINEL}"
 fi
-dib-network-core-ctl configure
-dib-observability-ctl configure
 
 validate_service_configs() {
     echo "Validating Samba config..."

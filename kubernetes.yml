@@ -33,16 +33,6 @@ spec:
       }
     }
 ---
-# Create a Secret for the domain administrator password before applying in real environments.
-apiVersion: v1
-kind: Secret
-metadata:
-  name: domain-in-a-box-secret
-  namespace: domain-in-a-box
-type: Opaque
-stringData:
-  domain-admin-password: "CHANGE_ME_BEFORE_APPLYING"
----
 # Create a Certificate resource for the domain controller's TLS certificate. This will generate a Secret containing the cert, key, and CA.
 apiVersion: cert-manager.io/v1
 kind: Certificate
