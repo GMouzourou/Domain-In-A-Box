@@ -1,3 +1,4 @@
+{{- $port := ternary 443 80 .Values.tls.storkServer.enabled -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -10,6 +11,6 @@ spec:
     {{- include "domain-in-a-box.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: stork-server
   ports:
-    - name: http
-      port: 80
-      targetPort: stork-http
+    - name: stork-rest
+      port: {{ $port }}
+      targetPort: stork-rest

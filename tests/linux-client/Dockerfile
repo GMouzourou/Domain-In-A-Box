@@ -1,7 +1,7 @@
 # Linux test client for testing Active Directory integration
 # This client will attempt to join the domain and validate AD functionality
 # Uses dbus-launch for realm operations (no systemd required)
-FROM ubuntu:26.04
+FROM ubuntu:26.04@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]

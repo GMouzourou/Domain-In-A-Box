@@ -26,12 +26,22 @@ func NewDNSClient(server string) *DNSClient {
 	}
 }
 
+func (d *DNSClient) exchange(message *dns.Msg) (*dns.Msg, error) {
+	timeout := d.Timeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return dns.ExchangeContext(ctx, message, d.Server)
+}
+
 // LookupA resolves an A record
 func (d *DNSClient) LookupA(domain string) (string, error) {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
 
-	r, err := dns.ExchangeContext(context.Background(), m, d.Server)
+	r, err := d.exchange(m)
 	if err != nil {
 		return "", fmt.Errorf("DNS query failed: %w", err)
 	}
@@ -55,7 +65,7 @@ func (d *DNSClient) LookupSRV(service, proto, name string) ([]*dns.SRV, error) {
 	srvName := fmt.Sprintf("_%s._%s.%s", service, proto, dns.Fqdn(name))
 	m.SetQuestion(srvName, dns.TypeSRV)
 
-	r, err := dns.ExchangeContext(context.Background(), m, d.Server)
+	r, err := d.exchange(m)
 	if err != nil {
 		return nil, fmt.Errorf("SRV query failed: %w", err)
 	}
@@ -88,7 +98,7 @@ func (d *DNSClient) LookupPTR(ip string) (string, error) {
 
 	m.SetQuestion(ptr, dns.TypePTR)
 
-	r, err := dns.ExchangeContext(context.Background(), m, d.Server)
+	r, err := d.exchange(m)
 	if err != nil {
 		return "", fmt.Errorf("PTR query failed: %w", err)
 	}

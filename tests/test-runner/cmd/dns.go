@@ -24,14 +24,7 @@ func runDNS(cmd *cobra.Command, args []string) error {
 	dnsClient := network.NewDNSClient(cfg.DomainControllerIP)
 	checks := []helpers.Check{
 		{Name: fmt.Sprintf("Resolve domain controller hostname (%s.%s) to %s", cfg.ServerHostname, cfg.DNSDomain, cfg.DomainControllerIP), Run: func() error {
-			resolvedIP, err := dnsClient.LookupA(fmt.Sprintf("%s.%s", cfg.ServerHostname, cfg.DNSDomain))
-			if err != nil {
-				return err
-			}
-			if resolvedIP != cfg.DomainControllerIP {
-				return fmt.Errorf("resolved to %s, want %s", resolvedIP, cfg.DomainControllerIP)
-			}
-			return nil
+			return checkDomainControllerDNS(cfg)
 		}},
 		{Name: fmt.Sprintf("Resolve Kerberos SRV record (_kerberos._tcp.%s)", cfg.DNSDomain), Run: func() error {
 			_, err := dnsClient.LookupSRV("kerberos", "tcp", cfg.DNSDomain)
@@ -56,5 +49,18 @@ func runDNS(cmd *cobra.Command, args []string) error {
 		return TestFailureError{Suite: "dns", Message: fmt.Sprintf("%d/%d passed", passed, total)}
 	}
 
+	return nil
+}
+
+func checkDomainControllerDNS(cfg testConfig) error {
+	dnsClient := network.NewDNSClient(cfg.DomainControllerIP)
+	name := fmt.Sprintf("%s.%s", cfg.ServerHostname, cfg.DNSDomain)
+	resolvedIP, err := dnsClient.LookupA(name)
+	if err != nil {
+		return err
+	}
+	if resolvedIP != cfg.DomainControllerIP {
+		return fmt.Errorf("%s resolved to %s, want %s", name, resolvedIP, cfg.DomainControllerIP)
+	}
 	return nil
 }

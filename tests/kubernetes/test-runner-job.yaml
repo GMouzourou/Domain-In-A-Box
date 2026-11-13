@@ -27,12 +27,20 @@ spec:
             privileged: true
             capabilities:
               add: ["NET_ADMIN", "NET_RAW"]
+          volumeMounts:
+            - name: ldap-ca
+              mountPath: /etc/dib-trust/ldap
+              readOnly: true
           args: ["/usr/local/bin/test-runner", "run", "all"]
           env:
+            - name: DIB_LDAP_CA_CERTIFICATE
+              value: "/etc/dib-trust/ldap/ca.crt"
             - name: DOMAIN_CONTROLLER_IP
               value: "192.168.3.1"
             - name: STORK_SERVER_IP
               value: "__STORK_IP__"
+            - name: STORK_SERVER_PORT
+              value: "443"
             - name: DIB_DOMAIN
               value: "DOMAIN"
             - name: DIB_REALM
@@ -61,3 +69,10 @@ spec:
               value: "net1"
             - name: DIB_DHCP_REQUIRE_LEASE
               value: "true"
+      volumes:
+        - name: ldap-ca
+          secret:
+            secretName: controller-tls
+            items:
+              - key: ca.crt
+                path: ca.crt

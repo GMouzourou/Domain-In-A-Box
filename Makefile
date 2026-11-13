@@ -139,7 +139,7 @@ lint: shellcheck hadolint docker-lint helm-lint
 shellcheck:
 	@echo "Linting shell scripts..."
 	@if command -v shellcheck &> /dev/null; then \
-		shellcheck -x entrypoint.sh tests/linux-client/entrypoint.sh tests/kubernetes/lab.sh; \
+		shellcheck -x entrypoint.sh tests/linux-client/entrypoint.sh tests/kubernetes/lab.sh tests/kubernetes/helm-chart-test.sh; \
 		echo "✓ Shell scripts checked"; \
 	else \
 		echo "⚠ shellcheck not available"; \
@@ -166,6 +166,7 @@ helm-lint:
 		helm lint charts/domain-in-a-box; \
 		helm template dib charts/domain-in-a-box > /dev/null; \
 		helm template dib charts/domain-in-a-box -f tests/kubernetes/values.ci.yaml > /dev/null; \
+		bash tests/kubernetes/helm-chart-test.sh; \
 		echo "✓ Helm chart valid"; \
 	else \
 		echo "⚠ helm not available"; \

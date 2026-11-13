@@ -2,6 +2,7 @@ package network
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"os"
@@ -63,7 +64,11 @@ func (lc *LDAPClient) Connect() (*ldap.Conn, error) {
 	addr := net.JoinHostPort(lc.Server, lc.Port)
 
 	if lc.UseTLS {
-		conn, err := ldap.DialTLS("tcp", addr, &tls.Config{InsecureSkipVerify: true})
+		tlsConfig, err := ldapTLSConfig(lc.Server, os.Getenv("DIB_LDAP_CA_CERTIFICATE"), os.Getenv("DIB_ALLOW_INSECURE_TEST_LDAP_TLS") == "true")
+		if err != nil {
+			return nil, err
+		}
+		conn, err := ldap.DialTLS("tcp", addr, tlsConfig)
 		if err != nil {
 			return nil, fmt.Errorf("LDAP TLS connection failed: %w", err)
 		}
@@ -200,7 +205,15 @@ func (lc *LDAPClient) searchWithLDAPTool(baseDN, filter string, attrs ...string)
 	args = append(args, attrs...)
 
 	cmd := exec.Command("ldapsearch", args...)
-	cmd.Env = append(os.Environ(), "LDAPTLS_REQCERT=never")
+	caPath := os.Getenv("DIB_LDAP_CA_CERTIFICATE")
+	requestCert := "LDAPTLS_REQCERT=demand"
+	if caPath == "" && os.Getenv("DIB_ALLOW_INSECURE_TEST_LDAP_TLS") == "true" {
+		requestCert = "LDAPTLS_REQCERT=never"
+	}
+	cmd.Env = append(os.Environ(), requestCert)
+	if caPath != "" {
+		cmd.Env = append(cmd.Env, "LDAPTLS_CACERT="+caPath)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("ldapsearch failed for user '%s': %w\n%s", lc.Username, err, strings.TrimSpace(string(output)))
@@ -216,4 +229,23 @@ func (lc *LDAPClient) searchWithLDAPTool(baseDN, filter string, attrs ...string)
 	}
 
 	return entries, nil
+}
+
+func ldapTLSConfig(server, caPath string, allowInsecure bool) (*tls.Config, error) {
+	if caPath == "" {
+		return &tls.Config{
+			ServerName:         server,
+			InsecureSkipVerify: allowInsecure,
+		}, nil
+	}
+
+	caPEM, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("read LDAP CA certificate %s: %w", caPath, err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("LDAP CA certificate %s contains no valid certificates", caPath)
+	}
+	return &tls.Config{RootCAs: roots, ServerName: server}, nil
 }

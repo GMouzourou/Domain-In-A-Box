@@ -66,6 +66,11 @@ func configureStorkServer(ctx context.Context) error {
 	if err := run(ctx, "chown", "root:stork-server", "/usr/share/stork/www/assets/authentication-methods"); err != nil {
 		return err
 	}
+	if path := os.Getenv("DIB_LDAP_CA_CERTIFICATE"); path != "" {
+		if err := installTrustedCA(ctx, path, "domain-in-a-box-ldap-ca.crt"); err != nil {
+			return err
+		}
+	}
 	return writeStorkServerEnvironment()
 }
 
@@ -96,7 +101,13 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 		}
 	}
 
-	if _, err := os.Stat("/var/lib/stork-agent/.stork-agent-registered"); err == nil {
+	const registrationMarker = "/var/lib/stork-agent/.stork-agent-registered"
+	if _, err := os.Stat(registrationMarker); err == nil {
+		if advertisedHost := os.Getenv("DIB_STORK_AGENT_ADVERTISE_HOST"); advertisedHost != "" {
+			if err := validateRegisteredAgentEndpoint(registrationMarker, advertisedHost); err != nil {
+				return err
+			}
+		}
 		return nil
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("check Stork agent registration: %w", err)
@@ -108,11 +119,22 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 	}
 	port := os.Getenv("STORK_SERVER_PORT")
 	if port == "" {
-		port = "80"
+		port = "443"
 	}
 	if err := waitFor(ctx, "Stork server", net.JoinHostPort(address, port)); err != nil {
 		return err
 	}
+	scheme := os.Getenv("STORK_SERVER_SCHEME")
+	if scheme == "" {
+		scheme = "https"
+	}
+	if scheme != "https" && scheme != "http" {
+		return fmt.Errorf("unsupported Stork server scheme %q", scheme)
+	}
+	if scheme == "http" && os.Getenv("DIB_ALLOW_INSECURE_STORK_HTTP") != "true" {
+		return fmt.Errorf("Stork agent registration over HTTP requires DIB_ALLOW_INSECURE_STORK_HTTP=true")
+	}
+	serverURL := scheme + "://" + net.JoinHostPort(address, port)
 	token, err := externalPostgresValue(ctx, "SELECT * FROM secret")
 	if err != nil {
 		return err
@@ -122,18 +144,17 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 	if serverToken == "" {
 		return fmt.Errorf("Stork server token is empty")
 	}
-	scheme := "http"
-	if port == "443" {
-		scheme = "https"
+	agentHost := os.Getenv("DIB_STORK_AGENT_ADVERTISE_HOST")
+	if agentHost == "" {
+		agentHost, err = requiredEnvironment("IP")
+		if err != nil {
+			return err
+		}
 	}
-	agentHost, err := requiredEnvironment("IP")
-	if err != nil {
-		return err
-	}
-	return registerStorkAgent(ctx, "/var/lib/stork-agent", "--server-url="+scheme+"://"+address+":"+port, "--server-token="+serverToken, "--agent-host="+agentHost, "--agent-port=8081", "--non-interactive")
+	return registerStorkAgent(ctx, "/var/lib/stork-agent", agentHost, "--server-url="+serverURL, "--server-token="+serverToken, "--agent-host="+agentHost, "--agent-port=8081", "--non-interactive")
 }
 
-func registerStorkAgent(ctx context.Context, stateDir string, args ...string) error {
+func registerStorkAgent(ctx context.Context, stateDir, advertisedHost string, args ...string) error {
 	if err := run(ctx, "stork-agent", append([]string{"register"}, args...)...); err != nil {
 		return err
 	}
@@ -141,7 +162,21 @@ func registerStorkAgent(ctx context.Context, stateDir string, args ...string) er
 	if err := run(ctx, "chown", "-R", "stork-agent:root", stateDir); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(stateDir, ".stork-agent-registered"), nil, 0o644)
+	return os.WriteFile(filepath.Join(stateDir, ".stork-agent-registered"), []byte(advertisedHost), 0o644)
+}
+
+func validateRegisteredAgentEndpoint(markerPath, advertisedHost string) error {
+	registeredHost, err := os.ReadFile(markerPath)
+	if err != nil {
+		return fmt.Errorf("read Stork agent registration marker: %w", err)
+	}
+	if len(registeredHost) == 0 {
+		return fmt.Errorf("Stork agent has a legacy registration with no recorded callback address; remove its old entry from Stork and clear its registration state before enabling the internal Service endpoint")
+	}
+	if string(registeredHost) != advertisedHost {
+		return fmt.Errorf("Stork agent callback address changed from %q to %q; update the existing Stork machine entry before restarting to avoid a stale or duplicate registration", string(registeredHost), advertisedHost)
+	}
+	return nil
 }
 
 func (r *Runner) Validate(context.Context) error {
@@ -308,8 +343,16 @@ func externalPostgresValue(ctx context.Context, query string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	sslMode, rootCert, err := postgresTLSSettings()
+	if err != nil {
+		return "", err
+	}
 	command := exec.CommandContext(ctx, "psql", "-h", host, "-p", port, "-U", user, "-d", database, "-tAc", query)
-	command.Env = append(os.Environ(), "PGPASSWORD="+password)
+	command.Env = environmentWithValues(os.Environ(), map[string]string{
+		"PGPASSWORD":    password,
+		"PGSSLMODE":     sslMode,
+		"PGSSLROOTCERT": rootCert,
+	})
 	output, err := command.Output()
 	if err != nil {
 		return "", fmt.Errorf("query configured PostgreSQL service: %w", err)
@@ -325,6 +368,86 @@ func requiredEnvironment(key string) (string, error) {
 	return value, nil
 }
 
+func postgresTLSSettings() (string, string, error) {
+	externalSetting := os.Getenv("DIB_STORK_DATABASE_EXTERNAL")
+	if externalSetting == "" && os.Getenv("STORK_DATABASE_HOST") != "" {
+		return "", "", fmt.Errorf("DIB_STORK_DATABASE_EXTERNAL must be set when STORK_DATABASE_HOST is configured")
+	}
+	if externalSetting == "" || externalSetting == "false" {
+		mode := os.Getenv("STORK_DATABASE_SSLMODE")
+		if mode == "" {
+			mode = "disable"
+		}
+		return mode, os.Getenv("STORK_DATABASE_SSLROOTCERT"), nil
+	}
+	if externalSetting != "true" {
+		return "", "", fmt.Errorf("invalid DIB_STORK_DATABASE_EXTERNAL value %q", externalSetting)
+	}
+
+	mode := os.Getenv("PGSSLMODE")
+	if mode == "" {
+		mode = os.Getenv("STORK_DATABASE_SSLMODE")
+	}
+	if mode == "" {
+		mode = "verify-full"
+	}
+	switch mode {
+	case "disable", "require":
+		if os.Getenv("DIB_ALLOW_INSECURE_POSTGRESQL") != "true" {
+			return "", "", fmt.Errorf("external PostgreSQL sslmode %q requires DIB_ALLOW_INSECURE_POSTGRESQL=true", mode)
+		}
+	case "verify-ca", "verify-full":
+	default:
+		return "", "", fmt.Errorf("unsupported external PostgreSQL sslmode %q", mode)
+	}
+
+	rootCert := os.Getenv("PGSSLROOTCERT")
+	if rootCert == "" {
+		rootCert = os.Getenv("STORK_DATABASE_SSLROOTCERT")
+	}
+	if mode == "verify-ca" || mode == "verify-full" {
+		if rootCert == "" {
+			return "", "", fmt.Errorf("external PostgreSQL sslmode %q requires PGSSLROOTCERT or STORK_DATABASE_SSLROOTCERT", mode)
+		}
+		info, err := os.Stat(rootCert)
+		if err != nil {
+			return "", "", fmt.Errorf("read external PostgreSQL CA certificate %s: %w", rootCert, err)
+		}
+		if info.Size() == 0 {
+			return "", "", fmt.Errorf("external PostgreSQL CA certificate %s is empty", rootCert)
+		}
+	}
+	return mode, rootCert, nil
+}
+
+func ldapTLSVerificationSetting() (string, error) {
+	skipVerification := os.Getenv("STORK_SERVER_HOOK_LDAP_SKIP_SERVER_TLS_VERIFICATION")
+	if skipVerification == "" {
+		skipVerification = "false"
+	}
+	if skipVerification != "true" && skipVerification != "false" {
+		return "", fmt.Errorf("invalid LDAP TLS verification value %q", skipVerification)
+	}
+	if skipVerification == "true" && os.Getenv("DIB_ALLOW_INSECURE_LDAP_TLS") != "true" {
+		return "", fmt.Errorf("skipping LDAP certificate verification requires DIB_ALLOW_INSECURE_LDAP_TLS=true")
+	}
+	return skipVerification, nil
+}
+
+func environmentWithValues(environment []string, values map[string]string) []string {
+	for key, value := range values {
+		prefix := key + "="
+		filtered := environment[:0]
+		for _, entry := range environment {
+			if !strings.HasPrefix(entry, prefix) {
+				filtered = append(filtered, entry)
+			}
+		}
+		environment = append(filtered, prefix+value)
+	}
+	return environment
+}
+
 func bootstrapAttempts() int {
 	if seconds, err := strconv.Atoi(os.Getenv("DIB_BOOTSTRAP_TIMEOUT_SECONDS")); err == nil && seconds > 0 {
 		return seconds
@@ -337,13 +460,18 @@ func writeStorkServerEnvironment() error {
 }
 
 func writeStorkServerEnvironmentAt(path string) error {
-	if _, err := os.Stat(path); err == nil {
+	existing, readErr := os.ReadFile(path)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return readErr
+	}
+	reconcile := os.Getenv("DIB_STORK_RECONCILE_SERVER_ENV") == "true"
+	if readErr == nil {
 		if err := os.Chmod(path, 0o600); err != nil {
 			return fmt.Errorf("restrict Stork environment file permissions: %w", err)
 		}
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
+		if !reconcile {
+			return nil
+		}
 	}
 	var err error
 	dnsDomain := os.Getenv("STORK_LDAP_DOMAIN")
@@ -404,6 +532,10 @@ func writeStorkServerEnvironmentAt(path string) error {
 	if err != nil {
 		return err
 	}
+	databaseSSLMode, databaseRootCert, err := postgresTLSSettings()
+	if err != nil {
+		return err
+	}
 	ldapRoot := domainComponents(dnsDomain)
 	lines := []string{
 		"STORK_DATABASE_HOST=" + databaseHost,
@@ -411,21 +543,37 @@ func writeStorkServerEnvironmentAt(path string) error {
 		"STORK_DATABASE_NAME=" + databaseName,
 		"STORK_DATABASE_USER_NAME=" + databaseUser,
 		"STORK_DATABASE_PASSWORD=" + databasePassword,
+		"STORK_DATABASE_SSLMODE=" + databaseSSLMode,
 		"",
 		"STORK_REST_HOST=" + ip,
 		"STORK_REST_PORT=" + tls.port,
 	}
 	if tls.enabled {
-		lines = append(lines, "STORK_REST_TLS_CERTIFICATE=/certs/cert.pem", "STORK_REST_TLS_PRIVATE_KEY=/certs/key.pem")
+		lines = append(lines, "STORK_REST_TLS_CERTIFICATE="+tls.certificate, "STORK_REST_TLS_PRIVATE_KEY="+tls.privateKey)
+	}
+	if ca := os.Getenv("STORK_REST_TLS_CA_CERTIFICATE"); ca != "" {
+		lines = append(lines, "STORK_REST_TLS_CA_CERTIFICATE="+ca)
+	}
+	if databaseRootCert != "" {
+		lines = append(lines, "STORK_DATABASE_SSLROOTCERT="+databaseRootCert)
+	}
+	for _, key := range []string{"STORK_DATABASE_SSLCERT", "STORK_DATABASE_SSLKEY"} {
+		if value := os.Getenv(key); value != "" {
+			lines = append(lines, key+"="+value)
+		}
 	}
 	ldapURL := os.Getenv("STORK_LDAP_URL")
 	if ldapURL == "" {
 		ldapURL = "ldaps://" + hostname + "." + dnsDomain + ":636"
 	}
+	skipLDAPVerification, err := ldapTLSVerificationSetting()
+	if err != nil {
+		return err
+	}
 	lines = append(lines,
 		"",
 		"STORK_SERVER_HOOK_LDAP_URL="+ldapURL,
-		"STORK_SERVER_HOOK_LDAP_SKIP_SERVER_TLS_VERIFICATION="+strconv.FormatBool(!tls.enabled),
+		"STORK_SERVER_HOOK_LDAP_SKIP_SERVER_TLS_VERIFICATION="+skipLDAPVerification,
 		"STORK_SERVER_HOOK_LDAP_BIND_USERDN=CN=ldap-search-user,CN=Users,"+ldapRoot,
 		"STORK_SERVER_HOOK_LDAP_BIND_PASSWORD="+ldapPassword,
 		"STORK_SERVER_HOOK_LDAP_ROOT="+ldapRoot,
@@ -438,31 +586,68 @@ func writeStorkServerEnvironmentAt(path string) error {
 		"STORK_SERVER_HOOK_LDAP_OBJECT_CLASS_GROUP=group",
 		"",
 	)
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600)
+	contents := strings.Join(lines, "\n")
+	if readErr == nil {
+		contents = mergeEnvironmentFile(string(existing), lines)
+	}
+	return os.WriteFile(path, []byte(contents), 0o600)
 }
 
 func writeStorkAgentEnvironment() error {
-	const path = "/etc/stork/agent.env"
-	if _, err := os.Stat(path); err == nil {
-		return nil
+	return writeStorkAgentEnvironmentAt("/etc/stork/agent.env")
+}
+
+func writeStorkAgentEnvironmentAt(path string) error {
+	existing, err := os.ReadFile(path)
+	if err == nil {
+		if os.Getenv("DIB_STORK_RECONCILE_AGENT_ENV") != "true" {
+			return nil
+		}
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	ip, err := requiredEnvironment("IP")
-	if err != nil {
-		return err
+	bindAddress := os.Getenv("DIB_STORK_AGENT_BIND_ADDRESS")
+	if bindAddress == "" {
+		var err error
+		bindAddress, err = requiredEnvironment("IP")
+		if err != nil {
+			return err
+		}
 	}
-	contents := "STORK_AGENT_HOST=" + ip + "\nSTORK_AGENT_PORT=8081\nSTORK_AGENT_PROMETHEUS_BIND9_EXPORTER_ADDRESS=0.0.0.0\nSTORK_AGENT_PROMETHEUS_BIND9_EXPORTER_PORT=9119\nSTORK_AGENT_PROMETHEUS_KEA_EXPORTER_ADDRESS=0.0.0.0\nSTORK_AGENT_PROMETHEUS_KEA_EXPORTER_PORT=9547\n"
+	lines := []string{
+		"STORK_AGENT_HOST=" + bindAddress,
+		"STORK_AGENT_PORT=8081",
+		"STORK_AGENT_PROMETHEUS_BIND9_EXPORTER_ADDRESS=0.0.0.0",
+		"STORK_AGENT_PROMETHEUS_BIND9_EXPORTER_PORT=9119",
+		"STORK_AGENT_PROMETHEUS_KEA_EXPORTER_ADDRESS=0.0.0.0",
+		"STORK_AGENT_PROMETHEUS_KEA_EXPORTER_PORT=9547",
+	}
+	contents := strings.Join(lines, "\n") + "\n"
+	if err == nil {
+		contents = mergeEnvironmentFile(string(existing), lines) + "\n"
+	}
 	return os.WriteFile(path, []byte(contents), 0o644)
 }
 
 type tlsSettings struct {
-	enabled bool
-	port    string
+	enabled     bool
+	port        string
+	certificate string
+	privateKey  string
 }
 
 func storkTLSSettings() (tlsSettings, error) {
-	paths := []string{"/certs/cert.pem", "/certs/key.pem", "/certs/ca.pem"}
+	certificate := os.Getenv("STORK_REST_TLS_CERTIFICATE")
+	privateKey := os.Getenv("STORK_REST_TLS_PRIVATE_KEY")
+	if certificate == "" {
+		certificate = "/certs/cert.pem"
+	}
+	if privateKey == "" {
+		privateKey = "/certs/key.pem"
+	}
+	explicit := os.Getenv("DIB_STORK_REST_TLS_ENABLED")
+	allowInsecureHTTP := os.Getenv("DIB_ALLOW_INSECURE_STORK_HTTP") == "true"
+	paths := []string{certificate, privateKey}
 	present := 0
 	for _, path := range paths {
 		if info, err := os.Stat(path); err == nil && info.Size() > 0 {
@@ -471,13 +656,66 @@ func storkTLSSettings() (tlsSettings, error) {
 			return tlsSettings{}, err
 		}
 	}
+	if explicit == "false" {
+		if !allowInsecureHTTP {
+			return tlsSettings{}, fmt.Errorf("disabling Stork REST TLS requires DIB_ALLOW_INSECURE_STORK_HTTP=true")
+		}
+		return tlsSettings{port: storkRESTPort("80")}, nil
+	}
+	if explicit != "" && explicit != "true" {
+		return tlsSettings{}, fmt.Errorf("invalid Stork REST TLS setting %q", explicit)
+	}
 	if present == 0 {
-		return tlsSettings{port: "80"}, nil
+		return tlsSettings{}, fmt.Errorf("Stork REST TLS requires non-empty certificate and private key files")
 	}
 	if present != len(paths) {
-		return tlsSettings{}, fmt.Errorf("custom Stork TLS requires non-empty cert.pem, key.pem, and ca.pem")
+		return tlsSettings{}, fmt.Errorf("custom Stork TLS requires non-empty certificate and private key files")
 	}
-	return tlsSettings{enabled: true, port: "443"}, nil
+	return tlsSettings{enabled: true, port: storkRESTPort("443"), certificate: certificate, privateKey: privateKey}, nil
+}
+
+func storkRESTPort(defaultPort string) string {
+	if port := os.Getenv("STORK_REST_PORT"); port != "" {
+		return port
+	}
+	return defaultPort
+}
+
+func mergeEnvironmentFile(existing string, generated []string) string {
+	managed := make(map[string]struct{}, len(generated))
+	for _, line := range generated {
+		if key, _, ok := strings.Cut(line, "="); ok {
+			managed[key] = struct{}{}
+		}
+	}
+	merged := make([]string, 0, len(strings.Split(existing, "\n"))+len(generated))
+	for _, line := range strings.Split(existing, "\n") {
+		key, _, ok := strings.Cut(line, "=")
+		_, replace := managed[key]
+		if !ok || (!replace && !strings.HasPrefix(key, "STORK_REST_TLS_") && !strings.HasPrefix(key, "STORK_DATABASE_SSL")) {
+			merged = append(merged, line)
+		}
+	}
+	merged = append(merged, generated...)
+	return strings.Join(merged, "\n")
+}
+
+func installTrustedCA(ctx context.Context, source, name string) error {
+	contents, err := os.ReadFile(source)
+	if err != nil {
+		return fmt.Errorf("read trusted CA certificate %s: %w", source, err)
+	}
+	if len(contents) == 0 {
+		return fmt.Errorf("trusted CA certificate %s is empty", source)
+	}
+	target := filepath.Join("/usr/local/share/ca-certificates", name)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(target, contents, 0o644); err != nil {
+		return err
+	}
+	return run(ctx, "update-ca-certificates")
 }
 
 func domainComponents(domain string) string {

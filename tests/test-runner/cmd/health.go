@@ -20,8 +20,8 @@ func runHealth(cmd *cobra.Command, args []string) error {
 
 	helpers.LogInfo("Starting health checks...")
 	checks := []helpers.Check{
-		{Name: "DNS service (port 53)", Run: func() error {
-			return network.CheckPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "53", "5353"), 5*time.Second)
+		{Name: fmt.Sprintf("DNS query for %s.%s", cfg.ServerHostname, cfg.DNSDomain), Run: func() error {
+			return checkDomainControllerDNS(cfg)
 		}},
 		{Name: "LDAP service (port 389)", Run: func() error {
 			return network.CheckPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "389", "3389"), 5*time.Second)
@@ -32,11 +32,8 @@ func runHealth(cmd *cobra.Command, args []string) error {
 		{Name: "SMB service (port 445)", Run: func() error {
 			return network.CheckPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "445", "1445"), 5*time.Second)
 		}},
-		{Name: "DHCP service (port 67)", Run: func() error {
-			return network.CheckUDPPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "67", "6767"), 5*time.Second)
-		}},
-		{Name: "Stork REST service (port 80)", Run: func() error {
-			return network.CheckPort(cfg.StorkServerIP, servicePort(cfg.StorkServerIP, "80", "80"), 5*time.Second)
+		{Name: fmt.Sprintf("Stork REST service (port %s)", cfg.StorkServerPort), Run: func() error {
+			return network.CheckPort(cfg.StorkServerIP, cfg.StorkServerPort, 5*time.Second)
 		}},
 		{Name: "Samba Prometheus endpoint (port 9922)", Run: func() error {
 			return network.CheckPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "9922", "9922"), 5*time.Second)
@@ -47,6 +44,14 @@ func runHealth(cmd *cobra.Command, args []string) error {
 		{Name: "Kea metrics endpoint (port 9547)", Run: func() error {
 			return network.CheckPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "9547", "9547"), 5*time.Second)
 		}},
+	}
+	if cfg.DHCPRequireLease {
+		checks = append(checks, helpers.Check{
+			Name: fmt.Sprintf("DHCP lease acquired on %s from pool %s", cfg.DHCPTestInterface, cfg.DHCPPool),
+			Run: func() error {
+				return checkDHCPLease(cfg)
+			},
+		})
 	}
 
 	passed, total := helpers.RunChecks("Health Check Results", checks, cfg.Verbose)

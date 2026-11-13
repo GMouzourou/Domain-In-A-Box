@@ -22,7 +22,6 @@ env:
 jobs:
   security:
     name: Security scan
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -32,15 +31,26 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Run Trivy vulnerability scanner
+      - name: Enforce Trivy severity policy
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          cache: false
+
+      - name: Generate Trivy SARIF report
+        if: always()
         uses: aquasecurity/trivy-action@0.35.0
         with:
           scan-type: fs
           scan-ref: .
           format: sarif
           output: trivy-results.sarif
+          exit-code: '0'
           cache: false
-        continue-on-error: true
 
       - name: Upload Trivy results
         if: always()
@@ -76,7 +86,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
 
       - name: Lint shell scripts
-        run: shellcheck -x entrypoint.sh tests/linux-client/entrypoint.sh tests/kubernetes/lab.sh
+        run: shellcheck -x entrypoint.sh tests/linux-client/entrypoint.sh tests/kubernetes/lab.sh tests/kubernetes/helm-chart-test.sh
 
       - name: Lint Dockerfiles
         run: |
@@ -93,6 +103,7 @@ jobs:
           helm lint charts/domain-in-a-box
           helm template dib charts/domain-in-a-box >/dev/null
           helm template dib charts/domain-in-a-box -f tests/kubernetes/values.ci.yaml >/dev/null
+          bash tests/kubernetes/helm-chart-test.sh
 
   build:
     name: Build Go test runner

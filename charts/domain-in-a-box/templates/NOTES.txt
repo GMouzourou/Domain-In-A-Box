@@ -33,5 +33,10 @@ External PostgreSQL password Secret: {{ .Values.database.external.passwordSecret
    Stork is using the internal PostgreSQL StatefulSet.
    {{- end }}
 
-4. Check Deployment Status:
+4. Stork Connectivity:
+   Agent callback Service: {{ include "domain-in-a-box.fullname" . }}-stork-agent (headless, port 8081)
+   Stork REST Service:     {{ include "domain-in-a-box.fullname" . }}-stork-server (port {{ ternary 443 80 .Values.tls.storkServer.enabled }})
+   The agent callback uses the internal Kubernetes network and does not need a LAN attachment.
+
+5. Check Deployment Status:
    kubectl rollout status statefulset/{{ include "domain-in-a-box.fullname" . }}

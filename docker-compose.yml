@@ -42,8 +42,15 @@ services:
       STORK_DATABASE_NAME: "${STORK_DATABASE_NAME:-stork}"
       STORK_DATABASE_USER_NAME: "${STORK_DATABASE_USER_NAME:-stork}"
       STORK_DATABASE_PASSWORD: "${STORK_DATABASE_PASSWORD:?Set STORK_DATABASE_PASSWORD in .env}"
+      STORK_DATABASE_SSLMODE: "${STORK_DATABASE_SSLMODE:-disable}"
+      STORK_DATABASE_SSLROOTCERT: "${STORK_DATABASE_SSLROOTCERT:-/etc/stork/postgresql-tls/ca.crt}"
+      DIB_STORK_DATABASE_EXTERNAL: "${DIB_STORK_DATABASE_EXTERNAL:-false}"
+      DIB_ALLOW_INSECURE_POSTGRESQL: "${DIB_ALLOW_INSECURE_POSTGRESQL:-false}"
       STORK_SERVER_HOST: "${STORK_SERVER_HOST:-192.168.1.3}"
-      STORK_SERVER_PORT: "${STORK_SERVER_PORT:-80}"
+      STORK_SERVER_PORT: "${STORK_SERVER_PORT:-443}"
+      STORK_SERVER_SCHEME: "${STORK_SERVER_SCHEME:-https}"
+      DIB_ALLOW_INSECURE_STORK_HTTP: "${DIB_ALLOW_INSECURE_STORK_HTTP:-false}"
+      DIB_STORK_SERVER_CA_CERTIFICATE: "/etc/dib-trust/stork-server/ca.crt"
     volumes:
       # These volumes persist configuration and data; adjust if you want to bind mount host directories
       - bind-config:/etc/bind
@@ -54,11 +61,14 @@ services:
       - kea-data:/var/lib/kea
       - stork-config:/etc/stork
       - stork-data:/var/lib/stork-agent
+      - "${DIB_CONTROLLER_TLS_DIR:-./certs/controller}:/certs:ro"
+      - "${DIB_STORK_SERVER_TLS_DIR:-./certs/stork-server}:/etc/dib-trust/stork-server:ro"
+      - "${DIB_POSTGRES_TLS_DIR:-./certs/postgresql}:/etc/stork/postgresql-tls:ro"
       - samba-data:/var/lib/samba
       - log-data:/var/log
   # 2. Separate PostgreSQL Service (Used when user hasn't brought their own external Postgres)
   postgres:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:1018733457011bf88d81db98cf43aac6d5150afc18787dbe204771fedf80ff95
     container_name: dib-postgres
     restart: unless-stopped
     environment:
@@ -93,13 +103,29 @@ services:
       STORK_LDAP_HOST: "${STORK_LDAP_HOST:-domain-server}"
       STORK_LDAP_URL: "${STORK_LDAP_URL:-ldaps://192.168.1.1:636}"
       STORK_LDAP_PASSWORD: "${DIB_LDAP_PASSWORD:?Set DIB_LDAP_PASSWORD in .env}"
+      DIB_LDAP_CA_CERTIFICATE: "/etc/dib-trust/ldap/ca.pem"
+      STORK_SERVER_HOOK_LDAP_SKIP_SERVER_TLS_VERIFICATION: "${STORK_LDAP_SKIP_SERVER_VERIFICATION:-false}"
+      DIB_ALLOW_INSECURE_LDAP_TLS: "${DIB_ALLOW_INSECURE_LDAP_TLS:-false}"
       STORK_DATABASE_HOST: "${STORK_DATABASE_HOST:-postgres}"
       STORK_DATABASE_PORT: "${STORK_DATABASE_PORT:-5432}"
       STORK_DATABASE_NAME: "${STORK_DATABASE_NAME:-stork}"
       STORK_DATABASE_USER_NAME: "${STORK_DATABASE_USER_NAME:-stork}"
       STORK_DATABASE_PASSWORD: "${STORK_DATABASE_PASSWORD:?Set STORK_DATABASE_PASSWORD in .env}"
+      STORK_DATABASE_SSLMODE: "${STORK_DATABASE_SSLMODE:-disable}"
+      STORK_DATABASE_SSLROOTCERT: "${STORK_DATABASE_SSLROOTCERT:-/etc/stork/postgresql-tls/ca.crt}"
+      DIB_STORK_DATABASE_EXTERNAL: "${DIB_STORK_DATABASE_EXTERNAL:-false}"
+      DIB_ALLOW_INSECURE_POSTGRESQL: "${DIB_ALLOW_INSECURE_POSTGRESQL:-false}"
+      DIB_STORK_REST_TLS_ENABLED: "${DIB_STORK_REST_TLS_ENABLED:-true}"
+      DIB_ALLOW_INSECURE_STORK_HTTP: "${DIB_ALLOW_INSECURE_STORK_HTTP:-false}"
+      STORK_REST_TLS_CERTIFICATE: "/certs/cert.pem"
+      STORK_REST_TLS_PRIVATE_KEY: "/certs/key.pem"
+      STORK_REST_PORT: "${STORK_REST_PORT:-443}"
     ports:
-      - "8080:80"
+      - "8080:443"
+    volumes:
+      - "${DIB_STORK_SERVER_TLS_DIR:-./certs/stork-server}:/certs:ro"
+      - "${DIB_CONTROLLER_TLS_DIR:-./certs/controller}:/etc/dib-trust/ldap:ro"
+      - "${DIB_POSTGRES_TLS_DIR:-./certs/postgresql}:/etc/stork/postgresql-tls:ro"
     networks:
       domain_net:
         ipv4_address: "192.168.1.3"

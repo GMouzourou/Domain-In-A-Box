@@ -2,3 +2,4 @@
 tests/test-runner/test-runner
 .tools/
 artifacts/
+certs/

@@ -29,8 +29,17 @@ metrics:
   enabled: true
   port: 9922
 
-# Domain of the in-cluster DNS. The controller points its own resolver at BIND,
-# so BIND needs a forward zone to keep resolving service names. Set to "" to skip.
+storkServer:
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+# Domain of the in-cluster DNS. The controller points its resolver at BIND,
+# which must forward this zone for in-cluster services. Empty uses cluster.local.
 clusterDNS:
   domain: "cluster.local"
 
@@ -38,12 +47,40 @@ multus:
   enabled: true
   createNAD: true
   networkName: "macvlan-network"
-  # The agent registers with its macvlan address, so the Stork server needs a
-  # presence on the same segment to reach it. Set to an existing attachment name.
+  # Optional LAN attachment for deployments that need the Stork server on an
+  # external network. The default agent callback uses an internal Service.
   storkServerNetworkName: ""
   masterInterface: "eth0"
   address: "192.168.1.1/24"
   gateway: "192.168.1.254"
+
+tls:
+  controller:
+    # Existing Secret containing the controller certificate, key, and CA.
+    secretName: "domain-in-a-box-controller-tls"
+    certificateKey: "tls.crt"
+    privateKeyKey: "tls.key"
+    caKey: "ca.crt"
+  storkServer:
+    enabled: true
+    # Existing Secret containing the Stork REST server certificate and key.
+    secretName: "domain-in-a-box-stork-server-tls"
+    certificateKey: "tls.crt"
+    privateKeyKey: "tls.key"
+    # CA trusted by the controller when it connects to the Stork REST service.
+    caSecretName: ""
+    caKey: "ca.crt"
+    # Disabling HTTPS requires explicitly allowing insecure registration.
+    allowInsecureHttp: false
+  ldap:
+    # Defaults to tls.controller.secretName when omitted.
+    caSecretName: ""
+    caKey: "ca.crt"
+    # Defaults to the controller's in-cluster Service name.
+    serverName: ""
+    skipServerVerification: false
+    # Skipping LDAP certificate verification requires explicit opt-in.
+    allowInsecureSkipServerVerification: false
 
 database:
   # Set external.enabled to true to connect Stork to an external PostgreSQL cluster (e.g. in RKE2)
@@ -56,6 +93,26 @@ database:
     passwordSecret:
       name: ""
       key: "password"
+    tls:
+      # For certificate verification use verify-ca or, preferably, verify-full.
+      sslMode: "verify-full"
+      # disable and require need explicit opt-in because they do not verify the peer.
+      allowInsecure: false
+      rootCertSecretName: ""
+      rootCertKey: "ca.crt"
+      clientCertSecretName: ""
+      clientCertKey: "tls.crt"
+      clientKeyKey: "tls.key"
+  internal:
+    image: "postgres:18-alpine@sha256:1018733457011bf88d81db98cf43aac6d5150afc18787dbe204771fedf80ff95"
+    imagePullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "1000m"
+        memory: "1Gi"
 
 persistence:
   enabled: true
