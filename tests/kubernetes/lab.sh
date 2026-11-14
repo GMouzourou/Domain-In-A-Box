@@ -134,6 +134,20 @@ cluster_ip() {
     kubectl -n "${NAMESPACE}" get service "$1" -o jsonpath='{.spec.clusterIP}'
 }
 
+wait_for_multus_runtime() {
+    log "Waiting for the node runtime to load the Multus CNI configuration"
+    for _ in $(seq 1 60); do
+        if docker exec "${NODE_NAME}" crictl info 2>/dev/null \
+            | grep -F '"Name": "multus-cni-network"' > /dev/null; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "The node runtime did not load the Multus CNI configuration" >&2
+    docker exec "${NODE_NAME}" crictl info >&2 || true
+    return 1
+}
+
 cmd_up() {
     require_tools
     ensure_kind
@@ -170,6 +184,7 @@ cmd_up() {
     log "Installing Multus ${MULTUS_VERSION}"
     kubectl apply -f "https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/${MULTUS_VERSION}/deployments/multus-daemonset.yml"
     kubectl -n kube-system rollout status daemonset/kube-multus-ds --timeout=300s
+    wait_for_multus_runtime
 }
 
 cmd_build() {
@@ -226,6 +241,7 @@ cmd_deploy() {
         --from-literal=stork-ldap-password='StorkLDAPTestPassword123!' \
         --dry-run=client -o yaml | kubectl apply -f -
 
+    wait_for_multus_runtime
     log "Installing chart"
     helm upgrade --install "${RELEASE}" "${REPO_ROOT}/charts/domain-in-a-box" \
         --namespace "${NAMESPACE}" \
@@ -240,21 +256,26 @@ cmd_deploy() {
         kubectl -n "${NAMESPACE}" logs "${RELEASE}-0" --all-containers=true --tail=-1 || true
         kubectl -n "${NAMESPACE}" exec "${RELEASE}-0" -- \
             python3 -c '
-import socket, sys
+import json, os, socket, subprocess, sys
 
 failed = []
-for port in (389, 9119, 9547):
+addresses = json.loads(subprocess.check_output(
+    ["ip", "-j", "-4", "addr", "show", "dev", os.environ["DIB_INTERFACE"]]
+))[0]["addr_info"]
+ip = next(a["local"] for a in addresses if a["family"] == "inet" and a["scope"] == "global")
+for host, port in (("127.0.0.1", 389), ("127.0.0.1", 88), (ip, 5353)):
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1):
+        with socket.create_connection((host, port), timeout=1):
             pass
     except OSError:
-        failed.append(port)
+        failed.append(f"{host}:{port}")
 
 print(
-    "Readiness ports not accepting connections: " + ", ".join(map(str, failed))
-    if failed else "All readiness ports accept connections"
+    "Core readiness marker missing" if not os.path.isfile("/run/dib-core-ready") else
+    "Readiness endpoints not accepting connections: " + ", ".join(failed)
+    if failed else "Core marker and readiness endpoints are present"
 )
-sys.exit(bool(failed))
+sys.exit(bool(failed) or not os.path.isfile("/run/dib-core-ready"))
 ' || true
         return 1
     fi
@@ -266,6 +287,23 @@ cmd_test() {
     STORK_IP=$(cluster_ip "${RELEASE}-stork-server")
     export STORK_IP
     local job="${RELEASE}-test-runner"
+
+    log "Waiting separately for Stork registration and exporter readiness"
+    local stork_ready=false
+    for _ in $(seq 1 60); do
+        if kubectl -n "${NAMESPACE}" exec "${RELEASE}-0" -- sh -ec '
+            test -s /var/lib/stork-agent/.stork-agent-registered
+            python3 -c "import socket; [(socket.create_connection((\"127.0.0.1\", p), timeout=1).close()) for p in (9119, 9547)]"
+        '; then
+            stork_ready=true
+            break
+        fi
+        sleep 5
+    done
+    if [ "${stork_ready}" != true ]; then
+        echo "Stork registration or exporters did not become ready" >&2
+        return 1
+    fi
 
     kubectl -n "${NAMESPACE}" delete job "${job}" --ignore-not-found --wait=true
     render "${SCRIPT_DIR}/test-runner-job.yaml" | kubectl -n "${NAMESPACE}" apply -f -

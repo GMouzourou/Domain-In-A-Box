@@ -85,18 +85,16 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 	}
 
 	if os.Getenv("DIB_STORK_BOOTSTRAP_PENDING") == "TRUE" {
-		ldapPassword, err := requiredEnvironment("DIB_LDAP_PASSWORD")
-		if err != nil {
-			return err
+		controllerMode := os.Getenv("DIB_CONTROLLER_MODE")
+		ldapPassword := ""
+		if controllerMode != "secondary" {
+			password, err := requiredEnvironment("DIB_LDAP_PASSWORD")
+			if err != nil {
+				return err
+			}
+			ldapPassword = password
 		}
-		if err := bootstrap.RunOnce(ctx, "/var/lib/samba/.dib-ldap-search-user-created", func(ctx context.Context) error {
-			return run(ctx, "samba-tool", "user", "create", "ldap-search-user", "--description=Read-only LDAP Bind User", ldapPassword)
-		}); err != nil {
-			return err
-		}
-		if err := bootstrap.RunOnce(ctx, "/var/lib/samba/.dib-ldap-search-user-expiry-set", func(ctx context.Context) error {
-			return run(ctx, "samba-tool", "user", "setexpiry", "ldap-search-user", "--noexpiry")
-		}); err != nil {
+		if err := bootstrapLDAPSearchUser(ctx, "/var/lib/samba", controllerMode, ldapPassword); err != nil {
 			return err
 		}
 	}
@@ -152,6 +150,21 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 		}
 	}
 	return registerStorkAgent(ctx, "/var/lib/stork-agent", agentHost, "--server-url="+serverURL, "--server-token="+serverToken, "--agent-host="+agentHost, "--agent-port=8081", "--non-interactive")
+}
+
+func bootstrapLDAPSearchUser(ctx context.Context, stateDir, controllerMode, password string) error {
+	if controllerMode == "secondary" {
+		return nil
+	}
+
+	if err := bootstrap.RunOnce(ctx, filepath.Join(stateDir, ".dib-ldap-search-user-created"), func(ctx context.Context) error {
+		return run(ctx, "samba-tool", "user", "create", "ldap-search-user", "--description=Read-only LDAP Bind User", password)
+	}); err != nil {
+		return err
+	}
+	return bootstrap.RunOnce(ctx, filepath.Join(stateDir, ".dib-ldap-search-user-expiry-set"), func(ctx context.Context) error {
+		return run(ctx, "samba-tool", "user", "setexpiry", "ldap-search-user", "--noexpiry")
+	})
 }
 
 func registerStorkAgent(ctx context.Context, stateDir, advertisedHost string, args ...string) error {

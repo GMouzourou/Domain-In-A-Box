@@ -9,6 +9,7 @@ RUN go build -o /out/dib-db-ctl ./cmd/dib-db-ctl && \
     go build -o /out/dib-identity-core-ctl ./cmd/dib-identity-core-ctl && \
     go build -o /out/dib-network-core-ctl ./cmd/dib-network-core-ctl && \
     go build -o /out/dib-observability-ctl ./cmd/dib-observability-ctl && \
+    go build -o /out/dib-sysvol-sync-ctl ./cmd/dib-sysvol-sync-ctl && \
     go build -o /out/dib-bootstrap-ctl ./cmd/dib-bootstrap-ctl
 
 FROM ubuntu:26.04@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96 AS builder
@@ -86,6 +87,7 @@ COPY --from=builder /tmp/samba-source/source3/utils/smb_prometheus_endpoint /usr
 COPY --from=go-builder /out/dib-identity-core-ctl /usr/local/bin/dib-identity-core-ctl
 COPY --from=go-builder /out/dib-network-core-ctl /usr/local/bin/dib-network-core-ctl
 COPY --from=go-builder /out/dib-observability-ctl /usr/local/bin/dib-observability-ctl
+COPY --from=go-builder /out/dib-sysvol-sync-ctl /usr/local/bin/dib-sysvol-sync-ctl
 COPY --from=go-builder /out/dib-bootstrap-ctl /usr/local/bin/dib-bootstrap-ctl
 COPY supervisord.conf /etc/supervisord.conf
 COPY entrypoint.sh /entrypoint.sh
@@ -118,7 +120,9 @@ RUN apt-get update && \
         supervisor \
         ed \
         iproute2 \
-        libcap2-bin && \
+        libcap2-bin \
+        openssh-server \
+        rsync && \
     apt-get autoremove -y && \
     apt-get clean && \
     setcap 'cap_net_admin,cap_net_raw=+ep' /usr/sbin/kea-dhcp4 && \
@@ -126,6 +130,11 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/isc-stork.list "${keyring_location}" && \
     \
     mkdir -p /run/samba /run/named /run/kea /etc/stork /var/log/kea /var/log/samba/cores && \
+    mkdir -p /run/sshd /var/empty && \
+    useradd --system --no-create-home --home-dir /var/empty --shell /bin/sh dibsysvolsync && \
+    random_password="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')" && \
+    printf 'dibsysvolsync:%s\n' "${random_password}" | chpasswd && \
+    unset random_password && \
     chmod -R 775 /entrypoint.sh /run/samba /run/named /etc/stork && \
     chmod 750 /run/kea && \
     chmod 700 /var/log/samba/cores && \
@@ -141,7 +150,7 @@ RUN apt-get update && \
         /etc/stork/agent.env \
         /etc/chrony/chrony.conf
 
-EXPOSE 53 53/udp 67/udp 68/udp 88 88/udp 123/udp 135 137/udp 138/udp 139 389 389/udp 445 464 464/udp 636 3268 3269 5353 5353/udp 9119 9547 9922 49152-49252/tcp
+EXPOSE 22 53 53/udp 67/udp 68/udp 88 88/udp 123/udp 135 137/udp 138/udp 139 389 389/udp 445 464 464/udp 636 3268 3269 5353 5353/udp 8005 9119 9547 9922 49152-49252/tcp
 
 ENTRYPOINT ["/entrypoint.sh"]
 

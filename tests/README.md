@@ -121,7 +121,7 @@ bash tests/kubernetes/helm-chart-test.sh
 ### Bring the stack up without immediately tearing it down
 
 ```bash
-docker-compose -f tests/docker-compose.test.yml up -d --build
+docker compose -f tests/docker-compose.test.yml up -d --build
 ```
 
 ### Check logs

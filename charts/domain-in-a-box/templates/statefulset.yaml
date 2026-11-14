@@ -1,6 +1,91 @@
 {{- $ldapCASecret := default .Values.tls.controller.secretName .Values.tls.ldap.caSecretName -}}
 {{- $clusterDomain := default "cluster.local" .Values.clusterDNS.domain -}}
-{{- $storkServerHost := printf "%s-stork-server.%s.svc.%s" (include "domain-in-a-box.fullname" .) .Release.Namespace $clusterDomain -}}
+{{- $storkServerHost := default (printf "%s-stork-server.%s.svc.%s" (include "domain-in-a-box.fullname" .) .Release.Namespace $clusterDomain) .Values.storkServer.host -}}
+{{- $localLANAddress := first (splitList "/" .Values.multus.address) -}}
+{{- if not (has .Values.domain.controllerMode (list "primary" "secondary")) -}}
+{{- fail "domain.controllerMode must be primary or secondary" -}}
+{{- end -}}
+{{- if and (eq .Values.domain.controllerMode "secondary") (not .Values.domain.joinServer) -}}
+{{- fail "domain.joinServer is required for a secondary controller" -}}
+{{- end -}}
+{{- if and (eq .Values.domain.controllerMode "secondary") .Values.domain.dhcpEnabled -}}
+{{- fail "domain.dhcpEnabled must be false for a secondary controller until DHCP HA is configured" -}}
+{{- end -}}
+{{- if and .Values.dhcpHA.enabled (eq .Values.domain.controllerMode "primary") (not .Values.domain.dhcpEnabled) -}}
+{{- fail "domain.dhcpEnabled must be true for the primary when DHCP HA is enabled" -}}
+{{- end -}}
+{{- if and .Values.dhcpHA.enabled (eq .Values.domain.controllerMode "secondary") .Values.domain.dhcpEnabled -}}
+{{- fail "domain.dhcpEnabled must be false for the standby when DHCP HA is enabled" -}}
+{{- end -}}
+{{- if and .Values.dhcpHA.enabled (not .Values.sysvolSync.enabled) -}}
+{{- fail "sysvolSync.enabled must be true when configuring the fixed multi-controller DHCP HA pair" -}}
+{{- end -}}
+{{- if and .Values.dhcpHA.enabled (not .Values.multus.enabled) -}}
+{{- fail "multus.enabled must be true when DHCP HA is enabled" -}}
+{{- end -}}
+{{- if and .Values.dhcpHA.enabled (not .Values.persistence.enabled) -}}
+{{- fail "persistence.enabled must be true when DHCP HA is enabled" -}}
+{{- end -}}
+{{- if and .Values.dhcpHA.enabled (not .Values.tls.controller.secretName) -}}
+{{- fail "tls.controller.secretName is required for mutual TLS between DHCP HA peers" -}}
+{{- end -}}
+{{- if and .Values.dhcpHA.enabled (or (not (regexMatch `^[0-9]{1,3}(\.[0-9]{1,3}){3}$` .Values.dhcpHA.primaryAddress)) (not (regexMatch `^[0-9]{1,3}(\.[0-9]{1,3}){3}$` .Values.dhcpHA.standbyAddress))) -}}
+{{- fail "dhcpHA.primaryAddress and dhcpHA.standbyAddress must be IPv4 addresses" -}}
+{{- end -}}
+{{- if and .Values.dhcpHA.enabled (eq .Values.dhcpHA.primaryAddress .Values.dhcpHA.standbyAddress) -}}
+{{- fail "dhcpHA.primaryAddress and dhcpHA.standbyAddress must differ" -}}
+{{- end -}}
+{{- if and .Values.dhcpHA.enabled (eq .Values.dhcpHA.primaryName .Values.dhcpHA.standbyName) -}}
+{{- fail "dhcpHA.primaryName and dhcpHA.standbyName must differ" -}}
+{{- end -}}
+{{- if and .Values.dhcpHA.enabled (eq .Values.domain.controllerMode "primary") (ne $localLANAddress .Values.dhcpHA.primaryAddress) -}}
+{{- fail "multus.address must match dhcpHA.primaryAddress for the primary" -}}
+{{- end -}}
+{{- if and .Values.dhcpHA.enabled (eq .Values.domain.controllerMode "secondary") (ne $localLANAddress .Values.dhcpHA.standbyAddress) -}}
+{{- fail "multus.address must match dhcpHA.standbyAddress for the standby" -}}
+{{- end -}}
+{{- if and (or .Values.sysvolSync.enabled .Values.dhcpHA.enabled) (or (not (hasKey .Values.nodeSelector "kubernetes.io/hostname")) (not (index .Values.nodeSelector "kubernetes.io/hostname"))) -}}
+{{- fail "nodeSelector.kubernetes.io/hostname must pin each paired controller to its designated host" -}}
+{{- end -}}
+{{- if and (or .Values.sysvolSync.enabled .Values.dhcpHA.enabled) (not .Values.persistence.enabled) -}}
+{{- fail "persistence.enabled must be true for each paired controller" -}}
+{{- end -}}
+{{- if and (or .Values.sysvolSync.enabled .Values.dhcpHA.enabled) (not .Values.multus.enabled) -}}
+{{- fail "multus.enabled must be true for each paired controller" -}}
+{{- end -}}
+{{- if and (eq .Values.domain.controllerMode "secondary") .Values.storkServer.enabled -}}
+{{- fail "storkServer.enabled must be false for a secondary controller; use the primary Stork server" -}}
+{{- end -}}
+{{- if and (eq .Values.domain.controllerMode "secondary") (not .Values.storkServer.host) -}}
+{{- fail "storkServer.host is required for a secondary controller" -}}
+{{- end -}}
+{{- if and (eq .Values.domain.controllerMode "secondary") (or (not (hasKey .Values.nodeSelector "kubernetes.io/hostname")) (not (index .Values.nodeSelector "kubernetes.io/hostname"))) -}}
+{{- fail "nodeSelector.kubernetes.io/hostname must pin a secondary controller to its designated host" -}}
+{{- end -}}
+{{- if and (eq .Values.domain.controllerMode "secondary") (not .Values.persistence.enabled) -}}
+{{- fail "persistence.enabled must be true for a secondary controller" -}}
+{{- end -}}
+{{- if and (eq .Values.domain.controllerMode "secondary") (not .Values.multus.enabled) -}}
+{{- fail "multus.enabled must be true for a secondary controller to have its own LAN address" -}}
+{{- end -}}
+{{- if and .Values.sysvolSync.enabled (not .Values.sysvolSync.secretName) -}}
+{{- fail "sysvolSync.secretName is required when SYSVOL synchronization is enabled" -}}
+{{- end -}}
+{{- if and .Values.sysvolSync.enabled (eq .Values.domain.controllerMode "primary") (not .Values.sysvolSync.peerAddress) -}}
+{{- fail "sysvolSync.peerAddress is required for the primary SYSVOL writer" -}}
+{{- end -}}
+{{- if and .Values.sysvolSync.enabled (eq .Values.domain.controllerMode "secondary") (not .Values.sysvolSync.writerAddress) -}}
+{{- fail "sysvolSync.writerAddress is required for the secondary SYSVOL reader" -}}
+{{- end -}}
+{{- if and .Values.sysvolSync.enabled (or (lt (int .Values.sysvolSync.sshPort) 1) (gt (int .Values.sysvolSync.sshPort) 65535)) -}}
+{{- fail "sysvolSync.sshPort must be between 1 and 65535" -}}
+{{- end -}}
+{{- if and .Values.sysvolSync.enabled (lt (int .Values.sysvolSync.intervalSeconds) 10) -}}
+{{- fail "sysvolSync.intervalSeconds must be at least 10" -}}
+{{- end -}}
+{{- if and (eq .Values.domain.controllerMode "secondary") (gt (len (printf "%s-0" (include "domain-in-a-box.fullname" .))) 15) -}}
+{{- fail "the secondary StatefulSet pod name must be no more than 15 characters for Samba's NetBIOS hostname" -}}
+{{- end -}}
 {{- if and .Values.tls.storkServer.enabled (not .Values.tls.storkServer.secretName) -}}
 {{- fail "tls.storkServer.secretName is required when tls.storkServer.enabled is true" -}}
 {{- end -}}
@@ -46,6 +131,24 @@ spec:
     spec:
       securityContext:
         runAsUser: 0
+      {{- if .Values.dhcpHA.enabled }}
+      initContainers:
+        - name: prepare-kea-ha-certificates
+          image: "{{ .Values.coreImage.repository }}:{{ .Values.coreImage.tag }}"
+          imagePullPolicy: {{ .Values.coreImage.pullPolicy }}
+          securityContext:
+            runAsUser: 0
+          command:
+            - sh
+            - -ec
+            - install -o root -g _kea -m 0440 /source/ca.pem /run/kea-ha-tls/ca.pem && install -o root -g _kea -m 0440 /source/cert.pem /run/kea-ha-tls/cert.pem && install -o root -g _kea -m 0440 /source/key.pem /run/kea-ha-tls/key.pem
+          volumeMounts:
+            - name: controller-tls
+              mountPath: /source
+              readOnly: true
+            - name: kea-ha-tls
+              mountPath: /run/kea-ha-tls
+      {{- end }}
       containers:
         - name: domain-server
           image: "{{ .Values.coreImage.repository }}:{{ .Values.coreImage.tag }}"
@@ -59,6 +162,25 @@ spec:
               value: {{ .Values.domain.realm | quote }}
             - name: DIB_DOMAIN
               value: {{ .Values.domain.name | quote }}
+            - name: DIB_CONTROLLER_MODE
+              value: {{ .Values.domain.controllerMode | quote }}
+            - name: DIB_SYSVOL_SYNC_ROLE
+              value: {{ ternary (ternary "writer" "standby" (eq .Values.domain.controllerMode "primary")) "disabled" .Values.sysvolSync.enabled | quote }}
+            {{- if .Values.sysvolSync.enabled }}
+            - name: DIB_SYSVOL_SYNC_SSH_PORT
+              value: {{ .Values.sysvolSync.sshPort | quote }}
+            - name: DIB_SYSVOL_SYNC_INTERVAL_SECONDS
+              value: {{ .Values.sysvolSync.intervalSeconds | quote }}
+            {{- if eq .Values.domain.controllerMode "primary" }}
+            - name: DIB_SYSVOL_SYNC_PEER_ADDRESS
+              value: {{ .Values.sysvolSync.peerAddress | quote }}
+            {{- else }}
+            - name: DIB_SYSVOL_SYNC_WRITER_ADDRESS
+              value: {{ .Values.sysvolSync.writerAddress | quote }}
+            {{- end }}
+            {{- end }}
+            - name: DIB_JOIN_SERVER
+              value: {{ .Values.domain.joinServer | quote }}
             - name: DIB_DOMAIN_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -68,6 +190,20 @@ spec:
               value: {{ .Values.domain.syncPasswordOnRestart | quote }}
             - name: DIB_INTERFACE
               value: {{ .Values.domain.interface | quote }}
+            - name: DIB_DHCP_ENABLED
+              value: {{ .Values.domain.dhcpEnabled | quote }}
+            - name: DIB_DHCP_HA_ENABLED
+              value: {{ .Values.dhcpHA.enabled | quote }}
+            {{- if .Values.dhcpHA.enabled }}
+            - name: DIB_DHCP_HA_PRIMARY_ADDRESS
+              value: {{ .Values.dhcpHA.primaryAddress | quote }}
+            - name: DIB_DHCP_HA_STANDBY_ADDRESS
+              value: {{ .Values.dhcpHA.standbyAddress | quote }}
+            - name: DIB_DHCP_HA_PRIMARY_NAME
+              value: {{ .Values.dhcpHA.primaryName | quote }}
+            - name: DIB_DHCP_HA_STANDBY_NAME
+              value: {{ .Values.dhcpHA.standbyName | quote }}
+            {{- end }}
             - name: DIB_DHCP_POOL
               value: {{ .Values.domain.dhcpPool | quote }}
             - name: DIB_DNS_FORWARDERS
@@ -225,9 +361,19 @@ spec:
             - name: kea-metrics
               containerPort: 9547
               protocol: TCP
+            {{- if .Values.dhcpHA.enabled }}
+            - name: kea-ha
+              containerPort: 8005
+              protocol: TCP
+            {{- end }}
             - name: samba-metrics
               containerPort: 9922
               protocol: TCP
+            {{- if and .Values.sysvolSync.enabled (eq .Values.domain.controllerMode "primary") }}
+            - name: sysvol-sync-ssh
+              containerPort: {{ .Values.sysvolSync.sshPort }}
+              protocol: TCP
+            {{- end }}
             - name: stork-agent
               containerPort: 8081
               protocol: TCP
@@ -238,11 +384,9 @@ spec:
               command: ["python3", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 389), 5); s.close()"]
             periodSeconds: 10
             failureThreshold: 30
-          # LDAP answers well before Kea DDNS and the Stork agent finish, so
-          # readiness tracks the observability endpoints that close out bootstrap.
           readinessProbe:
             exec:
-              command: ["python3", "-c", "import socket, sys; sys.exit(any(socket.socket().connect_ex(('127.0.0.1', port)) for port in (389, 9119, 9547)))"]
+              command: ["python3", "-c", "import json, os, socket, subprocess, sys; addresses = json.loads(subprocess.check_output(['ip', '-j', '-4', 'addr', 'show', 'dev', os.environ['DIB_INTERFACE']]))[0]['addr_info']; ip = next(a['local'] for a in addresses if a['family'] == 'inet' and a['scope'] == 'global'); sys.exit(not os.path.isfile('/run/dib-core-ready') or any(socket.socket().connect_ex((host, port)) for host, port in (('127.0.0.1', 389), ('127.0.0.1', 88), (ip, 5353))))"]
             periodSeconds: 10
             failureThreshold: 3
           volumeMounts:
@@ -276,9 +420,35 @@ spec:
             - name: data
               mountPath: /var/log
               subPath: log-data
+            {{- if .Values.sysvolSync.enabled }}
+            {{- if eq .Values.domain.controllerMode "primary" }}
+            - name: sysvol-sync-credentials
+              mountPath: /etc/ssh/dib-sysvol-hostkey
+              subPath: {{ .Values.sysvolSync.hostKeyKey | quote }}
+              readOnly: true
+            - name: sysvol-sync-credentials
+              mountPath: /etc/ssh/dib-sysvol-client.pub
+              subPath: {{ .Values.sysvolSync.clientPublicKeyKey | quote }}
+              readOnly: true
+            {{- else }}
+            - name: sysvol-sync-credentials
+              mountPath: /etc/ssh/dib-sysvol-clientkey
+              subPath: {{ .Values.sysvolSync.clientPrivateKeyKey | quote }}
+              readOnly: true
+            - name: sysvol-sync-credentials
+              mountPath: /etc/ssh/dib-sysvol-known-hosts
+              subPath: {{ .Values.sysvolSync.knownHostsKey | quote }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
             {{- if .Values.tls.controller.secretName }}
             - name: controller-tls
               mountPath: /certs
+              readOnly: true
+            {{- end }}
+            {{- if .Values.dhcpHA.enabled }}
+            - name: kea-ha-tls
+              mountPath: /run/kea-ha-tls
               readOnly: true
             {{- end }}
             {{- if .Values.tls.storkServer.enabled }}
@@ -297,6 +467,12 @@ spec:
               readOnly: true
             {{- end }}
       volumes:
+        {{- if .Values.sysvolSync.enabled }}
+        - name: sysvol-sync-credentials
+          secret:
+            secretName: {{ .Values.sysvolSync.secretName | quote }}
+            defaultMode: 0400
+        {{- end }}
         {{- if .Values.tls.controller.secretName }}
         - name: controller-tls
           secret:
@@ -309,6 +485,11 @@ spec:
                 path: key.pem
               - key: {{ .Values.tls.controller.caKey | quote }}
                 path: ca.pem
+        {{- end }}
+        {{- if .Values.dhcpHA.enabled }}
+        - name: kea-ha-tls
+          emptyDir:
+            medium: Memory
         {{- end }}
         {{- if .Values.tls.storkServer.enabled }}
         - name: stork-server-ca

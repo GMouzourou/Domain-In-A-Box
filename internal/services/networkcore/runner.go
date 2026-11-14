@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,46 +30,74 @@ func NewRunner() *Runner {
 func (r *Runner) Name() string { return "network-core" }
 
 func (r *Runner) Configure(ctx context.Context) error {
+	dhcpEnabled, err := dhcpEnabled()
+	if err != nil {
+		return err
+	}
+	dhcpHAEnabled, err := dhcpHAEnabled()
+	if err != nil {
+		return err
+	}
 	if err := configureChrony(); err != nil {
 		return err
 	}
 	if err := configureBind(ctx); err != nil {
 		return err
 	}
-	if err := configureKea(ctx); err != nil {
-		return err
+	if dhcpEnabled || dhcpHAEnabled {
+		if err := configureKea(ctx); err != nil {
+			return err
+		}
 	}
 	if os.Getenv("INIT_DOMAIN") == "FALSE" {
 		if err := updateBindForwarders("/etc/bind/named.conf.options", os.Getenv("DIB_DNS_FORWARDERS")); err != nil {
 			return err
 		}
-		return updateKeaDHCPPool("/etc/kea/kea-dhcp4.conf", os.Getenv("DIB_DHCP_POOL"))
+		if dhcpEnabled {
+			return updateKeaDHCPPool("/etc/kea/kea-dhcp4.conf", os.Getenv("DIB_DHCP_POOL"))
+		}
 	}
 	return nil
 }
 
 func (r *Runner) Bootstrap(ctx context.Context) error {
+	dhcpEnabled, err := dhcpEnabled()
+	if err != nil {
+		return err
+	}
+	dhcpHAEnabled, err := dhcpHAEnabled()
+	if err != nil {
+		return err
+	}
+	if !dhcpEnabled && !dhcpHAEnabled {
+		r.log.Infof("DHCP and DDNS are disabled; skipping Kea bootstrap")
+		return nil
+	}
 	realm, err := environment("DIB_REALM")
 	if err != nil {
 		return err
 	}
-	if os.Getenv("DIB_BOOTSTRAP_PENDING") == "TRUE" {
-		steps := []struct {
-			marker  string
-			command []string
-		}{
-			{"/var/lib/samba/.dib-keaddns-user-created", []string{"samba-tool", "user", "create", "keaddns", "--description=Kea DHCP DDNS GSS-TSIG service account", "--random-password"}},
-			{"/var/lib/samba/.dib-keaddns-expiry-set", []string{"samba-tool", "user", "setexpiry", "keaddns", "--noexpiry"}},
-			{"/var/lib/samba/.dib-keaddns-group-added", []string{"samba-tool", "group", "addmembers", "DnsAdmins", "keaddns"}},
-			{"/var/lib/kea/.dib-keaddns-keytab-exported", []string{"samba-tool", "domain", "exportkeytab", "/var/lib/kea/keaddns.keytab", "--principal=keaddns@" + realm}},
-		}
-		for _, step := range steps {
-			step := step
-			if err := bootstrap.RunOnce(ctx, step.marker, func(ctx context.Context) error {
-				return run(ctx, step.command[0], step.command[1:]...)
-			}); err != nil {
-				return err
-			}
+	hostname, err := environment("CONTAINER_HOSTNAME")
+	if err != nil {
+		return err
+	}
+	ddnsAccount := keaDDNSAccount(hostname)
+	type bootstrapStep struct {
+		marker  string
+		command []string
+	}
+	steps := []bootstrapStep{
+		{"/var/lib/samba/." + ddnsAccount + "-created", []string{"samba-tool", "user", "create", ddnsAccount, "--description=Kea DHCP DDNS GSS-TSIG service account", "--random-password"}},
+		{"/var/lib/samba/." + ddnsAccount + "-expiry-set", []string{"samba-tool", "user", "setexpiry", ddnsAccount, "--noexpiry"}},
+		{"/var/lib/samba/." + ddnsAccount + "-group-added", []string{"samba-tool", "group", "addmembers", "DnsAdmins", ddnsAccount}},
+		{"/var/lib/kea/." + ddnsAccount + "-keytab-exported", []string{"samba-tool", "domain", "exportkeytab", "/var/lib/kea/keaddns.keytab", "--principal=" + ddnsAccount + "@" + realm}},
+	}
+	for _, step := range steps {
+		step := step
+		if err := bootstrap.RunOnce(ctx, step.marker, func(ctx context.Context) error {
+			return run(ctx, step.command[0], step.command[1:]...)
+		}); err != nil {
+			return err
 		}
 	}
 
@@ -87,12 +116,16 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 	if err := run(ctx, "chown", "root:_kea", "/run/kea/keaddns.ccache"); err != nil {
 		return err
 	}
-	if err := runWithEnvironment(ctx, []string{"KRB5CCNAME=FILE:/run/kea/keaddns.ccache"}, "kinit", "-kt", "/var/lib/kea/keaddns.keytab", "keaddns@"+realm); err != nil {
+	if err := kinitKeaDDNS(ctx, hostname, realm); err != nil {
 		return err
 	}
 
-	cronLine := "0 */4 * * * KRB5CCNAME=FILE:/run/kea/keaddns.ccache /usr/bin/kinit -kt /var/lib/kea/keaddns.keytab keaddns@" + realm
+	cronLine := "0 */4 * * * KRB5CCNAME=FILE:/run/kea/keaddns.ccache /usr/bin/kinit -kt /var/lib/kea/keaddns.keytab " + ddnsAccount + "@" + realm
 	return ensureCronEntry(ctx, "_kea", cronLine)
+}
+
+func kinitKeaDDNS(ctx context.Context, hostname, realm string) error {
+	return runWithEnvironment(ctx, []string{"KRB5CCNAME=FILE:/run/kea/keaddns.ccache"}, "kinit", "-kt", "/var/lib/kea/keaddns.keytab", keaDDNSAccount(hostname)+"@"+realm)
 }
 
 func ensureCronEntry(ctx context.Context, user, line string) error {
@@ -126,12 +159,25 @@ func ensureCronEntry(ctx context.Context, user, line string) error {
 }
 
 func (r *Runner) Validate(ctx context.Context) error {
-	for _, command := range [][]string{
+	dhcpEnabled, err := dhcpEnabled()
+	if err != nil {
+		return err
+	}
+	dhcpHAEnabled, err := dhcpHAEnabled()
+	if err != nil {
+		return err
+	}
+	commands := [][]string{
 		{"chronyd", "-p", "-f", "/etc/chrony/chrony.conf"},
 		{"named-checkconf", "/etc/bind/named.conf"},
-		{"/usr/sbin/kea-dhcp4", "-t", "/etc/kea/kea-dhcp4.conf"},
-		{"/usr/sbin/kea-dhcp-ddns", "-t", "/etc/kea/kea-dhcp-ddns.conf"},
-	} {
+	}
+	if dhcpEnabled || dhcpHAEnabled {
+		commands = append(commands,
+			[]string{"/usr/sbin/kea-dhcp4", "-t", "/etc/kea/kea-dhcp4.conf"},
+			[]string{"/usr/sbin/kea-dhcp-ddns", "-t", "/etc/kea/kea-dhcp-ddns.conf"},
+		)
+	}
+	for _, command := range commands {
 		if err := run(ctx, command[0], command[1:]...); err != nil {
 			return err
 		}
@@ -146,12 +192,64 @@ func (r *Runner) Run(ctx context.Context) error {
 	case "bind":
 		return process.Replace("/usr/sbin/named", "-f", "-c", "/etc/bind/named.conf")
 	case "kea-dhcp4":
+		enabled, err := dhcpEnabled()
+		if err != nil {
+			return err
+		}
+		haEnabled, err := dhcpHAEnabled()
+		if err != nil {
+			return err
+		}
+		if !enabled && !haEnabled {
+			r.log.Infof("DHCPv4 is disabled; not starting Kea")
+			return nil
+		}
 		return process.Replace("/usr/sbin/kea-dhcp4", "-c", "/etc/kea/kea-dhcp4.conf")
 	case "kea-dhcp-ddns":
+		enabled, err := dhcpEnabled()
+		if err != nil {
+			return err
+		}
+		haEnabled, err := dhcpHAEnabled()
+		if err != nil {
+			return err
+		}
+		if !enabled && !haEnabled {
+			r.log.Infof("DHCP DDNS is disabled; not starting Kea")
+			return nil
+		}
 		return process.Replace("/usr/sbin/kea-dhcp-ddns", "-c", "/etc/kea/kea-dhcp-ddns.conf")
 	default:
 		return fmt.Errorf("DIB_NETWORK_COMPONENT must be one of chrony, bind, kea-dhcp4, or kea-dhcp-ddns")
 	}
+}
+
+func dhcpEnabled() (bool, error) {
+	value, configured := os.LookupEnv("DIB_DHCP_ENABLED")
+	return parseDHCPEnabled(value, configured)
+}
+
+func dhcpHAEnabled() (bool, error) {
+	value, configured := os.LookupEnv("DIB_DHCP_HA_ENABLED")
+	if !configured {
+		return false, nil
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("DIB_DHCP_HA_ENABLED must be a boolean: %w", err)
+	}
+	return enabled, nil
+}
+
+func parseDHCPEnabled(value string, configured bool) (bool, error) {
+	if !configured {
+		return true, nil
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("DIB_DHCP_ENABLED must be a boolean: %w", err)
+	}
+	return enabled, nil
 }
 
 func (r *Runner) Health(ctx context.Context) error {
@@ -366,13 +464,259 @@ func configureKea(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	controllerMode, err := environment("DIB_CONTROLLER_MODE")
+	if err != nil {
+		return err
+	}
 	reverseZone, err := environment("REVERSE_ZONE")
 	if err != nil {
 		return err
 	}
 
-	dhcp4 := map[string]any{"Dhcp4": map[string]any{
-		"control-socket":    map[string]any{"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket"},
+	haSettings, err := dhcpHASettingsFromEnvironment(controllerMode, ip)
+	if err != nil {
+		return err
+	}
+	dhcp4 := buildKeaDHCP4Configuration(interfaceName, ip, gateway, dnsDomain, subnet, pool, haSettings)
+	ddns := map[string]any{"DhcpDdns": map[string]any{
+		"control-socket":  map[string]any{"socket-type": "unix", "socket-name": "kea-ddns-ctrl-socket"},
+		"forward-ddns":    map[string]any{"ddns-domains": []map[string]any{{"name": dnsDomain + ".", "dns-servers": []map[string]string{{"ip-address": "127.0.0.1"}}}}},
+		"reverse-ddns":    map[string]any{"ddns-domains": []map[string]any{{"name": reverseZone + ".", "dns-servers": []map[string]string{{"ip-address": "127.0.0.1"}}}}},
+		"hooks-libraries": []map[string]any{{"library": "libddns_gss_tsig.so", "parameters": map[string]any{"server-principal": "DNS/" + hostname + "." + dnsDomain + "@" + realm, "client-principal": keaDDNSAccount(hostname) + "@" + realm, "credentials-cache": "FILE:/run/kea/keaddns.ccache", "servers": []map[string]string{{"id": "samba-dc", "ip-address": "127.0.0.1"}}}}},
+		"loggers":         []map[string]any{{"name": "kea-dhcp-ddns", "output_options": []map[string]string{{"output": "/var/log/kea/kea-dhcp-ddns.log"}}, "severity": "INFO"}},
+	}}
+	if err := writeJSONIfMissing("/etc/kea/kea-dhcp4.conf", dhcp4); err != nil {
+		return err
+	}
+	if err := validateKeaDHCPHAConfiguration("/etc/kea/kea-dhcp4.conf", haSettings); err != nil {
+		return err
+	}
+	if err := writeJSONIfMissing("/etc/kea/kea-dhcp-ddns.conf", ddns); err != nil {
+		return err
+	}
+	return reconcileKeaDDNSPrincipal("/etc/kea/kea-dhcp-ddns.conf", hostname, dnsDomain, realm)
+}
+
+type dhcpHASettings struct {
+	enabled        bool
+	controllerMode string
+	primaryAddress string
+	standbyAddress string
+	primaryName    string
+	standbyName    string
+}
+
+func dhcpHASettingsFromEnvironment(controllerMode, localAddress string) (dhcpHASettings, error) {
+	enabled, err := dhcpHAEnabled()
+	if err != nil {
+		return dhcpHASettings{}, err
+	}
+	if !enabled {
+		return dhcpHASettings{}, nil
+	}
+	if controllerMode != "primary" && controllerMode != "secondary" {
+		return dhcpHASettings{}, fmt.Errorf("DIB_CONTROLLER_MODE must be primary or secondary when DHCP HA is enabled")
+	}
+	primaryAddress, err := requiredIPv4Environment("DIB_DHCP_HA_PRIMARY_ADDRESS")
+	if err != nil {
+		return dhcpHASettings{}, err
+	}
+	standbyAddress, err := requiredIPv4Environment("DIB_DHCP_HA_STANDBY_ADDRESS")
+	if err != nil {
+		return dhcpHASettings{}, err
+	}
+	if primaryAddress == standbyAddress {
+		return dhcpHASettings{}, fmt.Errorf("DIB_DHCP_HA_PRIMARY_ADDRESS and DIB_DHCP_HA_STANDBY_ADDRESS must differ")
+	}
+	wantLocalAddress := primaryAddress
+	if controllerMode == "secondary" {
+		wantLocalAddress = standbyAddress
+	}
+	if localAddress != wantLocalAddress {
+		return dhcpHASettings{}, fmt.Errorf("local controller address %q does not match the DHCP HA %s address %q", localAddress, controllerMode, wantLocalAddress)
+	}
+	primaryName := environmentOrDefault("DIB_DHCP_HA_PRIMARY_NAME", "dib-primary")
+	standbyName := environmentOrDefault("DIB_DHCP_HA_STANDBY_NAME", "dib-secondary")
+	if primaryName == standbyName {
+		return dhcpHASettings{}, fmt.Errorf("DIB_DHCP_HA_PRIMARY_NAME and DIB_DHCP_HA_STANDBY_NAME must differ")
+	}
+	return dhcpHASettings{
+		enabled:        true,
+		controllerMode: controllerMode,
+		primaryAddress: primaryAddress,
+		standbyAddress: standbyAddress,
+		primaryName:    primaryName,
+		standbyName:    standbyName,
+	}, nil
+}
+
+func requiredIPv4Environment(name string) (string, error) {
+	value, err := environment(name)
+	if err != nil {
+		return "", err
+	}
+	if net.ParseIP(value).To4() == nil {
+		return "", fmt.Errorf("%s must be an IPv4 address, got %q", name, value)
+	}
+	return value, nil
+}
+
+func environmentOrDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func keaDDNSAccount(hostname string) string {
+	return "kea-" + hostname
+}
+
+func configuredDHCPHAPrimaryName() string {
+	return environmentOrDefault("DIB_DHCP_HA_PRIMARY_NAME", "dib-primary")
+}
+
+func keaDHCPHAPrimaryClass(primaryName string) string {
+	return "HA_" + primaryName
+}
+
+func validateKeaDHCPHAConfiguration(path string, expected dhcpHASettings) error {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read Kea DHCPv4 configuration: %w", err)
+	}
+	var configuration map[string]any
+	if err := json.Unmarshal(contents, &configuration); err != nil {
+		return fmt.Errorf("parse Kea DHCPv4 configuration: %w", err)
+	}
+	dhcp4, ok := configuration["Dhcp4"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("Kea DHCPv4 configuration has no Dhcp4 object")
+	}
+	hooks, _ := dhcp4["hooks-libraries"].([]any)
+	var ha map[string]any
+	for _, rawHook := range hooks {
+		hook, _ := rawHook.(map[string]any)
+		if hook["library"] != "libdhcp_ha.so" {
+			continue
+		}
+		parameters, _ := hook["parameters"].(map[string]any)
+		relationships, _ := parameters["high-availability"].([]any)
+		if len(relationships) == 1 {
+			ha, _ = relationships[0].(map[string]any)
+		}
+	}
+	if !expected.enabled {
+		if ha != nil {
+			return fmt.Errorf("persisted Kea DHCPv4 configuration still enables HA while DIB_DHCP_HA_ENABLED is false")
+		}
+		return nil
+	}
+	if ha == nil {
+		return fmt.Errorf("persisted Kea DHCPv4 configuration does not contain the configured DHCP HA relationship; back up and reconcile /etc/kea/kea-dhcp4.conf before enabling DHCP HA")
+	}
+	expectedName := expected.primaryName
+	if expected.controllerMode == "secondary" {
+		expectedName = expected.standbyName
+	}
+	if ha["this-server-name"] != expectedName || ha["mode"] != "hot-standby" {
+		return fmt.Errorf("persisted Kea DHCPv4 HA identity/mode does not match the configured %s controller", expected.controllerMode)
+	}
+	if ha["max-unacked-clients"] != float64(0) {
+		return fmt.Errorf("persisted Kea DHCPv4 HA configuration must detect partner loss without waiting for DHCP clients")
+	}
+	expectedClass := keaDHCPHAPrimaryClass(expected.primaryName)
+	subnets, _ := dhcp4["subnet4"].([]any)
+	hasPrimaryPool := false
+	for _, rawSubnet := range subnets {
+		subnet, _ := rawSubnet.(map[string]any)
+		if subnet["id"] != float64(1) {
+			continue
+		}
+		pools, _ := subnet["pools"].([]any)
+		for _, rawPool := range pools {
+			pool, _ := rawPool.(map[string]any)
+			classes, _ := pool["client-classes"].([]any)
+			for _, class := range classes {
+				if class == expectedClass {
+					hasPrimaryPool = true
+				}
+			}
+		}
+	}
+	if !hasPrimaryPool {
+		return fmt.Errorf("persisted Kea DHCPv4 HA configuration does not assign the primary scope class %q to a pool", expectedClass)
+	}
+	peers, _ := ha["peers"].([]any)
+	if len(peers) != 2 {
+		return fmt.Errorf("persisted Kea DHCPv4 HA configuration must contain exactly two peers")
+	}
+	expectedPeers := []struct {
+		name, address, role string
+	}{
+		{expected.primaryName, expected.primaryAddress, "primary"},
+		{expected.standbyName, expected.standbyAddress, "standby"},
+	}
+	for index, want := range expectedPeers {
+		peer, _ := peers[index].(map[string]any)
+		if peer["name"] != want.name ||
+			peer["url"] != fmt.Sprintf("https://%s:8005/", want.address) ||
+			peer["role"] != want.role ||
+			peer["auto-failover"] != false ||
+			peer["require-client-certs"] != true {
+			return fmt.Errorf("persisted Kea DHCPv4 HA peer %d does not match the required pinned mutual-TLS manual-failover configuration", index+1)
+		}
+	}
+	return nil
+}
+
+func reconcileKeaDDNSPrincipal(path, hostname, dnsDomain, realm string) error {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read Kea DHCP-DDNS configuration: %w", err)
+	}
+	var configuration map[string]any
+	if err := json.Unmarshal(contents, &configuration); err != nil {
+		return fmt.Errorf("parse Kea DHCP-DDNS configuration: %w", err)
+	}
+	dhcpDdns, ok := configuration["DhcpDdns"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("Kea DHCP-DDNS configuration has no DhcpDdns object")
+	}
+	hooks, ok := dhcpDdns["hooks-libraries"].([]any)
+	if !ok {
+		return fmt.Errorf("Kea DHCP-DDNS configuration has no hook libraries")
+	}
+	found := false
+	for _, rawHook := range hooks {
+		hook, _ := rawHook.(map[string]any)
+		if hook["library"] != "libddns_gss_tsig.so" {
+			continue
+		}
+		parameters, _ := hook["parameters"].(map[string]any)
+		if parameters == nil {
+			parameters = map[string]any{}
+			hook["parameters"] = parameters
+		}
+		parameters["server-principal"] = "DNS/" + hostname + "." + dnsDomain + "@" + realm
+		parameters["client-principal"] = keaDDNSAccount(hostname) + "@" + realm
+		parameters["credentials-cache"] = "FILE:/run/kea/keaddns.ccache"
+		parameters["servers"] = []map[string]string{{"id": "samba-dc", "ip-address": "127.0.0.1"}}
+		found = true
+	}
+	if !found {
+		return fmt.Errorf("Kea DHCP-DDNS configuration does not contain the managed GSS-TSIG hook")
+	}
+	return writeJSONAtomically(path, configuration)
+}
+
+func buildKeaDHCP4Configuration(interfaceName, ip, gateway, dnsDomain, subnet, pool string, ha dhcpHASettings) map[string]any {
+	poolConfig := map[string]any{"pool": pool}
+	if ha.enabled {
+		poolConfig["client-classes"] = []string{keaDHCPHAPrimaryClass(ha.primaryName)}
+	}
+	dhcp4 := map[string]any{
+		"control-socket":    map[string]any{"socket-type": "unix", "socket-name": "kea4-ctrl-socket"},
 		"interfaces-config": map[string]any{"interfaces": []string{interfaceName}},
 		"lease-database":    map[string]any{"type": "memfile"},
 		"option-data": []map[string]any{
@@ -381,21 +725,46 @@ func configureKea(ctx context.Context) error {
 			{"name": "domain-name", "code": 15, "data": dnsDomain},
 			{"name": "domain-search", "code": 119, "data": dnsDomain},
 		},
-		"subnet4":   []map[string]any{{"id": 1, "subnet": subnet, "pools": []map[string]any{{"pool": pool}}}},
+		"subnet4":   []map[string]any{{"id": 1, "subnet": subnet, "interface": interfaceName, "pools": []map[string]any{poolConfig}}},
 		"dhcp-ddns": map[string]any{"enable-updates": true},
 		"loggers":   []map[string]any{{"name": "kea-dhcp4", "output_options": []map[string]string{{"output": "/var/log/kea/kea-dhcp4.log"}}, "severity": "INFO"}},
-	}}
-	ddns := map[string]any{"DhcpDdns": map[string]any{
-		"control-socket":  map[string]any{"socket-type": "unix", "socket-name": "/run/kea/kea-ddns-ctrl-socket"},
-		"forward-ddns":    map[string]any{"ddns-domains": []map[string]any{{"name": dnsDomain + ".", "dns-servers": []map[string]string{{"ip-address": "127.0.0.1"}}}}},
-		"reverse-ddns":    map[string]any{"ddns-domains": []map[string]any{{"name": reverseZone + ".", "dns-servers": []map[string]string{{"ip-address": "127.0.0.1"}}}}},
-		"hooks-libraries": []map[string]any{{"library": "libddns_gss_tsig.so", "parameters": map[string]any{"server-principal": "DNS/" + hostname + "." + dnsDomain + "@" + realm, "client-principal": "keaddns@" + realm, "credentials-cache": "FILE:/run/kea/keaddns.ccache", "servers": []map[string]string{{"id": "samba-dc", "ip-address": "127.0.0.1"}}}}},
-		"loggers":         []map[string]any{{"name": "kea-dhcp-ddns", "output_options": []map[string]string{{"output": "/var/log/kea/kea-dhcp-ddns.log"}}, "severity": "INFO"}},
-	}}
-	if err := writeJSONIfMissing("/etc/kea/kea-dhcp4.conf", dhcp4); err != nil {
-		return err
 	}
-	return writeJSONIfMissing("/etc/kea/kea-dhcp-ddns.conf", ddns)
+	if ha.enabled {
+		localName := ha.primaryName
+		if ha.controllerMode == "secondary" {
+			localName = ha.standbyName
+		}
+		peerConfig := func(name, address, role string) map[string]any {
+			return map[string]any{
+				"name":                 name,
+				"url":                  fmt.Sprintf("https://%s:8005/", address),
+				"role":                 role,
+				"auto-failover":        false,
+				"require-client-certs": true,
+			}
+		}
+		haConfig := map[string]any{
+			"this-server-name":    localName,
+			"mode":                "hot-standby",
+			"max-unacked-clients": 0,
+			"trust-anchor":        "/run/kea-ha-tls/ca.pem",
+			"cert-file":           "/run/kea-ha-tls/cert.pem",
+			"key-file":            "/run/kea-ha-tls/key.pem",
+			"multi-threading": map[string]any{
+				"enable-multi-threading":  true,
+				"http-dedicated-listener": true,
+			},
+			"peers": []map[string]any{
+				peerConfig(ha.primaryName, ha.primaryAddress, "primary"),
+				peerConfig(ha.standbyName, ha.standbyAddress, "standby"),
+			},
+		}
+		dhcp4["hooks-libraries"] = []map[string]any{
+			{"library": "libdhcp_lease_cmds.so"},
+			{"library": "libdhcp_ha.so", "parameters": map[string]any{"high-availability": []map[string]any{haConfig}}},
+		}
+	}
+	return map[string]any{"Dhcp4": dhcp4}
 }
 
 func writeJSONIfMissing(path string, value any) error {

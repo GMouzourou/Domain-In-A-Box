@@ -1,7 +1,9 @@
-.PHONY: help build build-stork test test-unit test-dns test-dhcp test-ad test-ad-linux test-all test-prebuilt test-verbose test-clean lint shellcheck hadolint helm-lint docker-lint push push-docker push-ghcr dev-up dev-down dev-logs k8s-up k8s-build k8s-load k8s-images k8s-deploy k8s-test k8s-logs k8s-down k8s-all clean
+.PHONY: help build build-stork test test-unit test-dns test-dhcp test-ad test-ad-linux test-all test-prebuilt test-verbose test-clean lint version-check release-version shellcheck hadolint helm-lint docker-lint push push-docker push-ghcr dev-up dev-down dev-logs k8s-up k8s-build k8s-load k8s-images k8s-deploy k8s-test k8s-logs k8s-down k8s-all clean
 
 # Default target
 help:
+	@echo "  make release-version RELEASE_VERSION=X.Y.Z  Update all release pins"
+	@echo "  make version-check                        Check release consistency"
 	@echo "Domain-In-A-Box Development Commands"
 	@echo ""
 	@echo "Build & Image:"
@@ -133,7 +135,13 @@ test-ad-linux:
 	cd tests/test-runner && go run . run ad-linux
 
 # Linting targets
-lint: shellcheck hadolint docker-lint helm-lint
+version-check:
+	go run ./cmd/dib-release-ctl check
+
+release-version:
+	go run ./cmd/dib-release-ctl update $(RELEASE_VERSION)
+
+lint: version-check shellcheck hadolint docker-lint helm-lint
 	@echo "✓ All linting checks passed"
 
 shellcheck:

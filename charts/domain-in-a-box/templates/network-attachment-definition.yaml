@@ -22,7 +22,7 @@ spec:
           }
         ],
         "routes": [
-          { "dst": "{{ .Values.multus.address }}", "gw": "{{ .Values.multus.gateway }}" }
+          { "dst": "{{ .Values.multus.gateway }}/32", "gw": "{{ .Values.multus.gateway }}" }
         ]
       }
     }
