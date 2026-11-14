@@ -157,7 +157,7 @@ docker run -d \
   -v chrony-data:/var/lib/chrony \
   -v log-data:/var/log \
   -v "$PWD/certs/controller:/certs:ro" \
-  ghcr.io/gmouzourou/domain-in-a-box:0.5.0
+  ghcr.io/gmouzourou/domain-in-a-box:0.5.1
 ```
 
 `-e DIB_DOMAIN_ADMIN_PASSWORD` passes the value from your shell without

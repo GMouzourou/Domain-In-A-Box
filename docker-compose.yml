@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: core
-    image: ghcr.io/gmouzourou/domain-in-a-box:0.5.0
+    image: ghcr.io/gmouzourou/domain-in-a-box:0.5.1
     hostname: domain-server
     container_name: domain-in-a-box
     restart: unless-stopped
@@ -93,7 +93,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: stork
-    image: ghcr.io/gmouzourou/domain-in-a-box-stork:0.5.0
+    image: ghcr.io/gmouzourou/domain-in-a-box-stork:0.5.1
     container_name: dib-stork-server
     restart: unless-stopped
     command: ["run"]

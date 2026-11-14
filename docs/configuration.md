@@ -122,7 +122,7 @@ The chart reads passwords from an existing Secret; see
 | `multus.masterInterface` | `eth0` | Node interface used as the macvlan parent. |
 | `multus.address` | `192.168.1.1/24` | Controller's static LAN address and prefix. |
 | `multus.gateway` | `192.168.1.254` | LAN default gateway. |
-| `multus.storkServerNetworkName` | `""` | Optional LAN attachment for the Stork server. |
+| `multus.storkServerNetworkName` | `""` | Optional existing NetworkAttachmentDefinition giving the Stork server a LAN address. The chart does not create it. When set, the Stork Deployment uses the `Recreate` strategy so a static address is never held by two pods; upgrades briefly stop the Stork UI. |
 | `clusterDNS.domain` | `cluster.local` | Cluster DNS domain that BIND forwards to the cluster DNS service. |
 
 ### Multi-controller

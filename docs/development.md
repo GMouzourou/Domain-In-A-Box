@@ -105,12 +105,6 @@ locally, run `go run ./cmd/dib-release-ctl check --tag vX.Y.Z`.
 Publishing depends on the version-checking lint job, so mismatched versions
 cannot be published even if the integration suites pass.
 
-Published tags should be immutable: fix mistakes in a new patch release,
-not by moving a tag or overwriting its images. The explicitly authorized
-v0.5.0 repair is an exception; its release notes identify the replacement.
-Users who already pulled the old images must pull again, while digest-pinned
-deployments retain the original artifacts.
-
 ## Documentation
 
 User-facing changes need matching updates to this manual and, where the

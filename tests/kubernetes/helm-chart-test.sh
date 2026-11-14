@@ -110,6 +110,15 @@ if ! grep -Fq 'kubernetes.io/hostname: worker-2' "${secondary}"; then
     echo "Secondary controller is not pinned to its requested Kubernetes host" >&2
     exit 1
 fi
+if grep -Fq 'type: Recreate' "${defaults}"; then
+    echo "Stork without a LAN attachment should keep rolling updates" >&2
+    exit 1
+fi
+if ! helm template dib "${REPO_ROOT}/charts/domain-in-a-box" \
+    --set multus.storkServerNetworkName=dib-stork-macvlan | grep -Fq 'type: Recreate'; then
+    echo "Stork with a static LAN attachment must use the Recreate strategy" >&2
+    exit 1
+fi
 assert_env "${defaults}" STORK_SERVER_HOOK_LDAP_SKIP_SERVER_TLS_VERIFICATION false
 assert_env "${external_defaults}" STORK_DATABASE_SSLMODE verify-full
 assert_env "${defaults}" DIB_SYSVOL_SYNC_ROLE disabled
