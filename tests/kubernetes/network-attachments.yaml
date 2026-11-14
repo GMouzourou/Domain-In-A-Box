@@ -26,27 +26,6 @@ spec:
       }
     }
 ---
-# The Stork server needs to reach the agent on its macvlan address.
-apiVersion: k8s.cni.cncf.io/v1
-kind: NetworkAttachmentDefinition
-metadata:
-  name: dib-macvlan-stork
-spec:
-  config: |-
-    {
-      "cniVersion": "0.3.1",
-      "name": "dib-macvlan-stork",
-      "type": "macvlan",
-      "master": "__MASTER__",
-      "mode": "bridge",
-      "ipam": {
-        "type": "static",
-        "addresses": [
-          { "address": "192.168.3.4/24" }
-        ]
-      }
-    }
----
 # No IPAM: the client must obtain its address from Kea over the shared segment,
 # which is the actual DHCP assertion.
 apiVersion: k8s.cni.cncf.io/v1

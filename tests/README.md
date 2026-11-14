@@ -22,9 +22,9 @@ The Go runner under `test-runner/` exposes the following suites:
 
 | Suite | Purpose |
 | --- | --- |
-| `health` | Confirms DNS, LDAP, Kerberos, SMB, DHCP, Stork REST, BIND metrics, and Samba Prometheus endpoint ports are reachable |
+| `health` | Queries DNS and checks TCP service connections; checks a DHCP lease when the environment requires one |
 | `dns` | Validates A, SRV, and PTR lookups |
-| `dhcp` | Checks DHCP reachability and DNS accessibility |
+| `dhcp` | Queries DNS and checks a DHCP lease when the environment requires one |
 | `ad` | Verifies LDAP and AD object queries |
 | `ad-linux` | Performs Linux client domain join and SSSD user lookup |
 
@@ -53,6 +53,13 @@ go run . run dns
 go run . run ad-linux --verbose
 ```
 
+CI scans pull requests with Trivy and blocks on CRITICAL or HIGH findings.
+SARIF results are uploaded when repository permissions allow it.
+
+The test runner verifies LDAPS against system CAs by default; set
+`DIB_LDAP_CA_CERTIFICATE` when using a private CA. The isolated Compose test
+profile explicitly opts into LDAP TLS bypass for its test client.
+
 ---
 
 ## Kubernetes Test Environment
@@ -72,16 +79,40 @@ make k8s-down     # delete the cluster and the lab bridge
 
 | File | Purpose |
 | --- | --- |
-| `kind-cluster.yaml` | Single-node cluster; both pods must share a macvlan master |
-| `network-attachments.yaml` | CI-only attachments: static for the DC and Stork, IPAM-less for the client |
-| `values.ci.yaml` | Chart values using side-loaded images and the CI attachments |
+| `kind-cluster.yaml` | Single-node cluster; the DC and L2 test client use the macvlan master |
+| `network-attachments.yaml` | CI-only attachments: static for the DC and IPAM-less for the client |
+| `values.ci.yaml` | Chart values using side-loaded images and verified Stork/LDAP TLS |
 | `test-runner-job.yaml` | Runs the suites in-cluster with `ENABLE_DHCP_CLIENT=true` |
 | `lab.sh` | Provisions the cluster, Multus, images, chart and job |
 
+The Stork server does not receive a macvlan attachment. The domain controller
+advertises its Stork agent through a stable headless Service FQDN on port `8081`;
+the integration job checks that the registration marker contains that
+in-cluster Service FQDN. It then restarts Stork and the controller, checking
+that retained state keeps the same callback endpoint. Agent
+registration uses Stork's server-token flow, which also exercises the
+server-to-agent TLS ping. This kind setup is single-node and does not replace
+different-node validation in a multi-node RKE2 lab.
+
+The lab generates a short-lived test CA and service certificates with the
+controller and Stork Service DNS names, creates the chart's TLS Secrets, and
+uses the default certificate-verification settings. Successful Stork
+registration therefore exercises HTTPS chain/hostname verification. The
+authenticated test-runner LDAP queries verify the controller's LDAPS
+certificate. `openssl` is required by `lab.sh` to generate these temporary
+certificates.
+
 The controller points its own resolver at BIND, so the chart sets
 `DIB_CLUSTER_DOMAIN` and BIND forwards that domain back to the cluster DNS the
-pod started with. That is what keeps `dib-postgresql` and `dib-stork-server`
-resolvable during bootstrap.
+pod started with. That is what keeps the database, Stork server, and agent
+Service names resolvable during bootstrap.
+
+The chart's rendered TLS/Secret configuration checks can be run without a
+cluster:
+
+```bash
+bash tests/kubernetes/helm-chart-test.sh
+```
 
 ---
 
@@ -119,7 +150,7 @@ kinit Administrator@DOMAIN.HOME.ARPA
 
 ## Current Review Notes
 
-Latest verified behavior:
+Existing project baseline before the current chart changes:
 
 - `make test-all` currently completes successfully with `Passed: 5/5`
 - `make k8s-all` completes successfully with `Passed: 5/5`, including a real DHCP lease from the Kea pool

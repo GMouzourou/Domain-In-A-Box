@@ -30,7 +30,15 @@ multus:
   # so the CI-only client network stays out of the chart.
   createNAD: false
   networkName: "dib-macvlan-server"
-  storkServerNetworkName: "dib-macvlan-stork"
+
+tls:
+  controller:
+    secretName: controller-tls
+  storkServer:
+    enabled: true
+    secretName: stork-tls
+  ldap:
+    skipServerVerification: false
 
 database:
   external:

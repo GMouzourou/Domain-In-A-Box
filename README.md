@@ -132,7 +132,11 @@ This section describes how to deploy Domain-In-A-Box on Kubernetes. In a product
 - **Interface naming:** The example sets `DIB_INTERFACE=net1`, which is the common Multus secondary interface name. If your CNI names it differently, this value will need updating.
 - **Privileged workload:** The container is intentionally privileged because Samba AD DC, BIND, and Kea need low-level networking access.
 - **Persistent storage:** The sample assumes a `ReadWriteOnce` storage class. You may need to add `storageClassName` if your cluster does not provide a suitable default storage class.
-- **Firewalling and service reachability:** When clients use the Multus/macvlan IP directly, allow the AD/DC ports on your network path: `53/tcp+udp`, `67/udp`, `68/udp`, `80/tcp`, `88/tcp+udp`, `123/udp`, `135/tcp`, `137/udp`, `138/udp`, `139/tcp`, `389/tcp+udp`, `443/tcp`, `445/tcp`, `464/tcp+udp`, `636/tcp`, `9119/tcp`, `9547/tcp`, `9922/tcp`, `3268/tcp`, `3269/tcp`, and the fixed Samba RPC range `49152-49252/tcp`. **Note:** Stork UI is available on port `80` (port `443` requires custom TLS files).
+- **Firewalling and service reachability:** When clients use the Multus/macvlan IP directly, allow the AD/DC ports on your network path: `53/tcp+udp`, `67/udp`, `68/udp`, `88/tcp+udp`, `123/udp`, `135/tcp`, `137/udp`, `138/udp`, `139/tcp`, `389/tcp+udp`, `445/tcp`, `464/tcp+udp`, `636/tcp`, `9119/tcp`, `9547/tcp`, `9922/tcp`, `3268/tcp`, `3269/tcp`, and the fixed Samba RPC range `49152-49252/tcp`. The Stork server and agent use Kubernetes Services on the primary pod network; the agent is not exposed on the LAN.
+
+Multi-controller redundancy is not supported. The staged design review,
+prototype gates, and unresolved safety decisions are documented in
+[`REDUNDANCY-DESIGN.md`](REDUNDANCY-DESIGN.md).
 
 ### Step-by-Step Instructions
 
@@ -220,17 +224,26 @@ kubectl -n domain-in-a-box create secret generic domain-in-a-box-credentials \
   --from-literal=stork-db-password="$STORK_DATABASE_PASSWORD" \
   --from-literal=stork-ldap-password="$DIB_LDAP_PASSWORD"
 
+kubectl -n domain-in-a-box create secret generic domain-in-a-box-controller-tls \
+  --from-file=tls.crt=./certs/controller/tls.crt \
+  --from-file=tls.key=./certs/controller/tls.key \
+  --from-file=ca.crt=./certs/controller/ca.crt
+kubectl -n domain-in-a-box create secret generic domain-in-a-box-stork-server-tls \
+  --from-file=tls.crt=./certs/stork-server/tls.crt \
+  --from-file=tls.key=./certs/stork-server/tls.key \
+  --from-file=ca.crt=./certs/stork-server/ca.crt
+
 helm install domain-in-a-box ./charts/domain-in-a-box \
   --namespace domain-in-a-box \
   --set multus.address="192.168.1.1/24" \
   --set multus.gateway="192.168.1.254"
 ```
 
-Create the Secret before installing the chart and provide unique, strong password values through your secret manager or shell environment. The chart does not create credentials or ship with default passwords. Set `credentials.secretName` and the three key values if you use a differently named Secret.
+Create these Secrets before installing the chart and provide unique, strong password values through your secret manager or shell environment. The chart does not create credentials or ship with default passwords. Set `credentials.secretName` and the three key values if you use a differently named credentials Secret.
 
 #### External PostgreSQL Integration (Optional)
 
-If your Kubernetes cluster already runs an external PostgreSQL cluster (such as a shared database instance in RKE2 used by Gitea or other apps), you can configure Stork to use the external database instead of the chart-managed PostgreSQL StatefulSet:
+If your Kubernetes cluster already runs an external PostgreSQL cluster (such as a shared database instance in RKE2 used by Gitea or other apps), configure Stork to use a hostname-verified TLS connection instead of the chart-managed PostgreSQL StatefulSet:
 
 ```bash
 helm install domain-in-a-box ./charts/domain-in-a-box \
@@ -240,8 +253,113 @@ helm install domain-in-a-box ./charts/domain-in-a-box \
   --set database.external.name="stork" \
   --set database.external.user="stork" \
   --set database.external.passwordSecret.name="postgres-credentials" \
-  --set database.external.passwordSecret.key="password"
+  --set database.external.passwordSecret.key="password" \
+  --set database.external.tls.sslMode="verify-full" \
+  --set database.external.tls.rootCertSecretName="postgres-ca"
 ```
+
+The `postgres-ca` Secret must contain the CA certificate under the configured
+`rootCertKey`. A DNS database host must match a DNS SAN in its certificate; an
+IP-address host must match an IP SAN:
+
+```bash
+helm upgrade --install domain-in-a-box ./charts/domain-in-a-box \
+  --namespace domain-in-a-box \
+  --set database.external.enabled=true \
+  --set database.external.host="postgresql.default.svc.cluster.local" \
+  --set database.external.passwordSecret.name="postgres-credentials" \
+  --set database.external.tls.sslMode="verify-full" \
+  --set database.external.tls.rootCertSecretName="postgres-ca"
+```
+
+The optional `database.external.tls.clientCertSecretName` supports PostgreSQL
+client-certificate authentication. Its Secret must contain the configured
+client certificate and private-key keys. The chart references Secrets and
+mounts their contents at runtime; private keys and passwords are not stored in
+Helm values or rendered manifests. `verify-ca` and `verify-full` require a root
+CA Secret. `require` encrypts the connection but does not verify the database
+hostname.
+
+#### Controller and Stork TLS
+
+The chart accepts existing Secrets and does not generate or publish
+certificates. Configure separate controller and Stork server certificates;
+they may be issued by the same CA, but must not share a private key. The
+controller Secret defaults to keys `tls.crt`, `tls.key`, and `ca.crt`. The
+Stork server Secret defaults to `tls.crt` and `tls.key`; its CA defaults to
+`ca.crt` in that Secret and is mounted into the controller's trust store for
+verified HTTPS registration. Key names and CA Secret references can be
+overridden with the `tls.*` values.
+
+Verified LDAPS and HTTPS registration are enabled by default. The default
+controller and Stork TLS Secret names are shown here; both Secrets must exist
+before the pods can start:
+
+```yaml
+tls:
+  controller:
+    secretName: domain-in-a-box-controller-tls
+  storkServer:
+    enabled: true
+    secretName: domain-in-a-box-stork-server-tls
+  ldap:
+    skipServerVerification: false
+```
+
+The LDAP CA defaults to the controller Secret's `ca.crt`. For a separate CA,
+set `tls.ldap.caSecretName` and `tls.ldap.caKey`. The LDAP `serverName` value,
+when overridden, is used in the LDAPS URL and must be present in the
+controller certificate's DNS SANs. By default it is the controller Service
+FQDN `<release>-domain-in-a-box-svc.<namespace>.svc.cluster.local`.
+`tls.ldap.skipServerVerification` defaults to `false`; the chart requires a CA
+Secret when verification is enabled. Stork REST TLS is configured independently
+and does not implicitly alter LDAP verification.
+
+The Stork REST certificate must cover
+`<release>-domain-in-a-box-stork-server.<namespace>.svc.cluster.local`
+(or the actual Service FQDN rendered by Helm). The agent registers over
+verified HTTPS on port `443` by default. Disabling HTTPS requires setting
+`tls.storkServer.allowInsecureHttp: true`; this is intended only for isolated
+tests.
+
+External PostgreSQL defaults to `verify-full` and requires a CA Secret. The
+`disable` and `require` modes, LDAP verification bypass, and Stork HTTP can be
+used only with their corresponding `allowInsecure` value explicitly enabled.
+These options weaken transport security and should not be used in production.
+
+The controller's resource requests and limits are configured with the top-level
+`resources` value. Stork server resources use `storkServer.resources`, and the
+bundled PostgreSQL resources use `database.internal.resources`; each supports
+`requests` and `limits`. The bundled PostgreSQL image is digest-pinned by
+default and can be updated through `database.internal.image`.
+
+The Stork agent callback is a headless Service on port `8081`, advertised
+using its stable in-cluster FQDN. Its DNS record follows the controller pod
+when it is rescheduled. The headless endpoint also lets Stork's registration
+ping listener bind to the controller pod IP while the server stores the
+stable DNS name. No Stork-server macvlan attachment or additional LAN IP is
+needed for this path. The agent port is not exposed outside the cluster. The
+Stork UI Service is ClusterIP; use an Ingress or a local port-forward to
+access it, for example:
+
+Set `clusterDNS.domain` to the Kubernetes cluster DNS suffix if it differs
+from `cluster.local`; an empty value also falls back to `cluster.local` so the
+controller's BIND resolver continues to resolve internal Service names.
+
+```bash
+kubectl -n domain-in-a-box port-forward service/domain-in-a-box-stork-server 8080:80
+# For Stork REST TLS, use: 8443:443
+```
+
+TLS Secret rotation does not guarantee live reload. Samba copies the
+controller certificate and CA into persistent state, and both Samba and the
+Stork server load certificates/trust at startup. After updating Secrets,
+restart the controller StatefulSet and Stork server Deployment in a controlled
+maintenance window. For an existing release whose Stork agent was registered
+with its old LAN address, first remove that machine entry from Stork, delete
+`/var/lib/stork-agent/.stork-agent-registered` in the controller pod, then
+restart it so it registers the stable Service address. The stored agent
+credentials can be retained.
 
 ### Additional Considerations
 
@@ -285,9 +403,21 @@ The `docker-compose.yml` file includes several settings that you might want to a
   - **DIB_SAMBA_METRICS_ENABLED:** Enables `smb_prometheus_endpoint` (default `true`).
   - **DIB_SAMBA_METRICS_PORT:** Samba Prometheus exporter port (default `9922`).
   - **DIB_BOOTSTRAP_TIMEOUT_SECONDS:** Maximum time for post-start dependency checks before bootstrap fails (default `120`).
-  - **Stork integration:** The core image does not include a PostgreSQL server or Stork server. Leave `STORK_SERVER_HOST` unset to run the core-only Docker CLI deployment without Stork. Stork can be enabled later by configuring its server and PostgreSQL endpoint with the `STORK_*` settings and restarting; agent account setup and registration then run as a separate one-time bootstrap.
+  - **Stork integration:** The core image does not include a PostgreSQL server or Stork server. Leave `STORK_SERVER_HOST` unset to run the core-only Docker CLI deployment without Stork. To enable Stork, configure its HTTPS server endpoint, trusted CA, and PostgreSQL endpoint. Set `DIB_STORK_DATABASE_EXTERNAL` explicitly when configuring a database host; external PostgreSQL requires `verify-full` and a CA by default.
   - **STORK_DATABASE_HOST / STORK_DATABASE_PORT:** Connection details for the PostgreSQL database used by Stork. In Docker Compose the database service is `postgres`; set these explicitly when using an external database.
   - **STORK_DATABASE_NAME / STORK_DATABASE_USER_NAME / STORK_DATABASE_PASSWORD:** Stork database authentication credentials.
+
+  Docker Compose enables verified Stork HTTPS and LDAPS by default. Provide
+  read-only certificate files under `./certs/controller` (`cert.pem`,
+  `key.pem`, `ca.pem`) and `./certs/stork-server` (`cert.pem`, `key.pem`,
+  `ca.crt`). The controller certificate must cover the configured LDAPS
+  endpoint (`192.168.1.1` by default), and the
+  Stork certificate must cover `192.168.1.3` (or the configured
+  `STORK_SERVER_HOST`). For an external PostgreSQL service, set
+  `DIB_STORK_DATABASE_EXTERNAL=true`, `STORK_DATABASE_SSLMODE=verify-full`,
+  and provide its CA at `./certs/postgresql/ca.crt`. Plain HTTP or skipped
+  certificate verification is blocked unless its explicit
+  `DIB_ALLOW_INSECURE_*` opt-in is enabled.
 
   Existing Samba, BIND, Kea, and Stork configuration files are preserved. On restart, Domain-In-A-Box reconciles only its managed values: the Samba metrics setting and optional Administrator password, BIND forwarders, and the Kea DHCP pool for subnet ID `1`.
 

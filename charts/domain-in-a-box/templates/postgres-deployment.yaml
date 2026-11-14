@@ -37,8 +37,8 @@ spec:
     spec:
       containers:
         - name: postgresql
-          image: postgres:18-alpine
-          imagePullPolicy: IfNotPresent
+          image: {{ .Values.database.internal.image | quote }}
+          imagePullPolicy: {{ .Values.database.internal.imagePullPolicy }}
           env:
             - name: POSTGRES_DB
               value: "stork"
@@ -53,6 +53,26 @@ spec:
             - name: postgresql
               containerPort: 5432
               protocol: TCP
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "stork", "-d", "stork"]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "stork", "-d", "stork"]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432", "-U", "stork", "-d", "stork"]
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.database.internal.resources | nindent 12 }}
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql

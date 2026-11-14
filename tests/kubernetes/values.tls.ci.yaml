@@ -1,0 +1,20 @@
+fullnameOverride: dib
+
+tls:
+  controller:
+    secretName: controller-tls
+  storkServer:
+    enabled: true
+    secretName: stork-tls
+  ldap:
+    skipServerVerification: false
+
+database:
+  external:
+    enabled: true
+    passwordSecret:
+      name: postgres-credentials
+    tls:
+      sslMode: verify-full
+      rootCertSecretName: postgres-ca
+      clientCertSecretName: postgres-client

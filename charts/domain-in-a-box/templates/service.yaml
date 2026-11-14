@@ -27,10 +27,6 @@ spec:
       port: 68
       targetPort: 68
       protocol: UDP
-    - name: stork-srv-http
-      port: 80
-      targetPort: 80
-      protocol: TCP
     - name: kerberos-tcp
       port: 88
       targetPort: 88
@@ -67,10 +63,6 @@ spec:
       port: 389
       targetPort: 389
       protocol: UDP
-    - name: stork-srv-https
-      port: 443
-      targetPort: 443
-      protocol: TCP
     - name: smb
       port: 445
       targetPort: 445

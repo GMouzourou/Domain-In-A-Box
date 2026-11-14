@@ -5,31 +5,26 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"time"
 
 	"github.com/GMouzourou/domain-in-a-box/tests/test-runner/internal/helpers"
-	"github.com/GMouzourou/domain-in-a-box/tests/test-runner/internal/network"
 	"github.com/spf13/cobra"
 )
 
 var dhcpCmd = &cobra.Command{
 	Use:   "dhcp",
-	Short: "Run DHCP reachability and DDNS readiness checks",
+	Short: "Validate DNS and DHCP lease readiness",
 	RunE:  runDHCP,
 }
 
 func runDHCP(cmd *cobra.Command, args []string) error {
 	cfg := getTestConfig(cmd)
 
-	helpers.LogInfo("Starting DHCP reachability checks...")
+	helpers.LogInfo("Starting DHCP and DNS checks...")
 	helpers.LogInfo(fmt.Sprintf("DHCP Server: %s", cfg.DomainControllerIP))
 
 	checks := []helpers.Check{
-		{Name: "DHCP server reachable on UDP port 67", Run: func() error {
-			return network.CheckUDPPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "67", "6767"), 5*time.Second)
-		}},
-		{Name: "DNS service reachable for DDNS integration", Run: func() error {
-			return network.CheckPort(cfg.DomainControllerIP, servicePort(cfg.DomainControllerIP, "53", "5353"), 5*time.Second)
+		{Name: fmt.Sprintf("Resolve domain controller hostname (%s.%s)", cfg.ServerHostname, cfg.DNSDomain), Run: func() error {
+			return checkDomainControllerDNS(cfg)
 		}},
 	}
 
@@ -39,10 +34,7 @@ func runDHCP(cmd *cobra.Command, args []string) error {
 		checks = append(checks, helpers.Check{
 			Name: fmt.Sprintf("DHCP lease acquired on %s from pool %s", cfg.DHCPTestInterface, cfg.DHCPPool),
 			Run: func() error {
-				if !cfg.DHCPLeaseSuccess {
-					return fmt.Errorf("no lease was acquired on %q", cfg.DHCPTestInterface)
-				}
-				return leaseWithinPool(cfg.DHCPTestInterface, cfg.DHCPPool)
+				return checkDHCPLease(cfg)
 			},
 		})
 	}
@@ -53,6 +45,13 @@ func runDHCP(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func checkDHCPLease(cfg testConfig) error {
+	if !cfg.DHCPLeaseSuccess {
+		return fmt.Errorf("no lease was acquired on %q", cfg.DHCPTestInterface)
+	}
+	return leaseWithinPool(cfg.DHCPTestInterface, cfg.DHCPPool)
 }
 
 // leaseWithinPool verifies the interface holds an address from "start-end".

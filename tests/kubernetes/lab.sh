@@ -29,18 +29,75 @@ STORK_IMAGE="${STORK_IMAGE:-domain-in-a-box-stork:ci}"
 CLIENT_IMAGE="${CLIENT_IMAGE:-domain-in-a-box-test-client:ci}"
 
 KIND_BIN="${KIND_BIN:-}"
+TLS_DIR=""
 
 log() { echo "==> $*"; }
 
 require_tools() {
     local missing=0
-    for tool in docker kubectl helm curl; do
+    for tool in docker kubectl helm curl openssl; do
         if ! command -v "${tool}" > /dev/null 2>&1; then
             echo "Required tool not found: ${tool}" >&2
             missing=1
         fi
     done
     [ "${missing}" -eq 0 ] || exit 1
+}
+
+cleanup_tls_material() {
+    if [[ -z "${TLS_DIR}" || ! -d "${TLS_DIR}" ]]; then
+        return
+    fi
+    rm -f -- \
+        "${TLS_DIR}/ca.crt" "${TLS_DIR}/ca.key" "${TLS_DIR}/ca.srl" \
+        "${TLS_DIR}/controller.crt" "${TLS_DIR}/controller.csr" "${TLS_DIR}/controller.ext" "${TLS_DIR}/controller.key" \
+        "${TLS_DIR}/stork.crt" "${TLS_DIR}/stork.csr" "${TLS_DIR}/stork.ext" "${TLS_DIR}/stork.key"
+    rmdir -- "${TLS_DIR}" 2>/dev/null || true
+    TLS_DIR=""
+}
+
+generate_test_server_certificate() {
+    local tls_dir=$1 name=$2 hostname=$3 extra_san=${4:-}
+    local san="DNS:${hostname}"
+    local serial_args=()
+    if [[ -n "${extra_san}" ]]; then
+        san="${san},${extra_san}"
+    fi
+    if [[ -f "${tls_dir}/ca.srl" ]]; then
+        serial_args=(-CAserial "${tls_dir}/ca.srl")
+    else
+        serial_args=(-CAcreateserial)
+    fi
+
+    openssl req -new -newkey rsa:2048 -nodes \
+        -keyout "${tls_dir}/${name}.key" \
+        -out "${tls_dir}/${name}.csr" \
+        -subj "/CN=${hostname}"
+    printf '%s\n' \
+        'basicConstraints=critical,CA:FALSE' \
+        'keyUsage=critical,digitalSignature,keyEncipherment' \
+        'extendedKeyUsage=serverAuth' \
+        "subjectAltName=${san}" > "${tls_dir}/${name}.ext"
+    openssl x509 -req -in "${tls_dir}/${name}.csr" \
+        -CA "${tls_dir}/ca.crt" -CAkey "${tls_dir}/ca.key" \
+        "${serial_args[@]}" \
+        -out "${tls_dir}/${name}.crt" -days 2 -sha256 \
+        -extfile "${tls_dir}/${name}.ext"
+}
+
+generate_test_tls_material() {
+    local tls_dir=$1
+    local controller_hostname="${RELEASE}-svc.${NAMESPACE}.svc.cluster.local"
+    local stork_hostname="${RELEASE}-stork-server.${NAMESPACE}.svc.cluster.local"
+
+    openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 2 \
+        -keyout "${tls_dir}/ca.key" \
+        -out "${tls_dir}/ca.crt" \
+        -subj "/CN=Domain-In-A-Box Integration Test CA" \
+        -addext "basicConstraints=critical,CA:TRUE" \
+        -addext "keyUsage=critical,keyCertSign,cRLSign"
+    generate_test_server_certificate "${tls_dir}" controller "${controller_hostname}" "IP:192.168.3.1"
+    generate_test_server_certificate "${tls_dir}" stork "${stork_hostname}"
 }
 
 ensure_kind() {
@@ -149,6 +206,19 @@ cmd_deploy() {
     log "Using macvlan master ${DIB_MACVLAN_MASTER}"
 
     kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+    TLS_DIR=$(mktemp -d)
+    trap cleanup_tls_material EXIT
+    generate_test_tls_material "${TLS_DIR}"
+    kubectl -n "${NAMESPACE}" create secret generic controller-tls \
+        --from-file=tls.crt="${TLS_DIR}/controller.crt" \
+        --from-file=tls.key="${TLS_DIR}/controller.key" \
+        --from-file=ca.crt="${TLS_DIR}/ca.crt" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    kubectl -n "${NAMESPACE}" create secret generic stork-tls \
+        --from-file=tls.crt="${TLS_DIR}/stork.crt" \
+        --from-file=tls.key="${TLS_DIR}/stork.key" \
+        --from-file=ca.crt="${TLS_DIR}/ca.crt" \
+        --dry-run=client -o yaml | kubectl apply -f -
     render "${SCRIPT_DIR}/network-attachments.yaml" | kubectl -n "${NAMESPACE}" apply -f -
     kubectl -n "${NAMESPACE}" create secret generic dib-credentials \
         --from-literal=domain-admin-password='P@ssw0rd' \
@@ -160,6 +230,7 @@ cmd_deploy() {
     helm upgrade --install "${RELEASE}" "${REPO_ROOT}/charts/domain-in-a-box" \
         --namespace "${NAMESPACE}" \
         --values "${SCRIPT_DIR}/values.ci.yaml" \
+        --set fullnameOverride="${RELEASE}" \
         --wait=false
 
     log "Waiting for the domain controller to become ready"
@@ -209,7 +280,30 @@ cmd_test() {
         succeeded=$(kubectl -n "${NAMESPACE}" get job "${job}" -o jsonpath='{.status.succeeded}')
         failed=$(kubectl -n "${NAMESPACE}" get job "${job}" -o jsonpath='{.status.failed}')
         if [ "${succeeded:-0}" -gt 0 ]; then
+            local agent_service expected_agent_host registered_agent_host
+            agent_service=$(kubectl -n "${NAMESPACE}" get service \
+                -l app.kubernetes.io/component=stork-agent \
+                -o jsonpath='{.items[0].metadata.name}')
+            expected_agent_host="${agent_service}.${NAMESPACE}.svc.cluster.local"
+            registered_agent_host=$(kubectl -n "${NAMESPACE}" exec "${RELEASE}-0" -- \
+                cat /var/lib/stork-agent/.stork-agent-registered)
+            if [ "${registered_agent_host}" != "${expected_agent_host}" ]; then
+                echo "Stork agent registered ${registered_agent_host}, expected ${expected_agent_host}" >&2
+                return 1
+            fi
+            log "Restarting Stork server and controller to check retained agent registration"
+            kubectl -n "${NAMESPACE}" rollout restart "deployment/${RELEASE}-stork-server"
+            kubectl -n "${NAMESPACE}" rollout status "deployment/${RELEASE}-stork-server" --timeout=300s
+            kubectl -n "${NAMESPACE}" rollout restart "statefulset/${RELEASE}"
+            kubectl -n "${NAMESPACE}" rollout status "statefulset/${RELEASE}" --timeout=900s
+            registered_agent_host=$(kubectl -n "${NAMESPACE}" exec "${RELEASE}-0" -- \
+                cat /var/lib/stork-agent/.stork-agent-registered)
+            if [ "${registered_agent_host}" != "${expected_agent_host}" ]; then
+                echo "Stork agent callback changed after restart: ${registered_agent_host}" >&2
+                return 1
+            fi
             log "Test suite passed"
+            log "Stork agent uses the internal callback Service ${expected_agent_host} after restarts"
             return 0
         fi
         if [ "${failed:-0}" -gt 0 ]; then

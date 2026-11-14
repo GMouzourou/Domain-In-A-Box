@@ -1,3 +1,6 @@
+{{- $ldapCASecret := default .Values.tls.controller.secretName .Values.tls.ldap.caSecretName -}}
+{{- $clusterDomain := default "cluster.local" .Values.clusterDNS.domain -}}
+{{- $ldapHost := default (printf "%s-svc.%s.svc.%s" (include "domain-in-a-box.fullname" .) .Release.Namespace $clusterDomain) .Values.tls.ldap.serverName -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -31,12 +34,34 @@ spec:
               value: "stork-server"
             - name: STORK_REST_HOST
               value: "0.0.0.0"
+            - name: STORK_REST_PORT
+              value: {{ ternary "443" "80" .Values.tls.storkServer.enabled | quote }}
+            - name: DIB_STORK_REST_TLS_ENABLED
+              value: {{ .Values.tls.storkServer.enabled | quote }}
+            - name: DIB_ALLOW_INSECURE_STORK_HTTP
+              value: {{ .Values.tls.storkServer.allowInsecureHttp | quote }}
+            - name: DIB_STORK_RECONCILE_SERVER_ENV
+              value: "true"
             - name: STORK_LDAP_URL
-              value: {{ printf "ldaps://%s-svc:636" (include "domain-in-a-box.fullname" .) | quote }}
+              value: {{ printf "ldaps://%s:636" $ldapHost | quote }}
             - name: STORK_LDAP_DOMAIN
               value: {{ .Values.domain.realm | lower | quote }}
             - name: STORK_LDAP_HOST
-              value: {{ include "domain-in-a-box.fullname" . | quote }}
+              value: {{ $ldapHost | quote }}
+            - name: STORK_SERVER_HOOK_LDAP_SKIP_SERVER_TLS_VERIFICATION
+              value: {{ .Values.tls.ldap.skipServerVerification | quote }}
+            - name: DIB_ALLOW_INSECURE_LDAP_TLS
+              value: {{ .Values.tls.ldap.allowInsecureSkipServerVerification | quote }}
+            {{- if $ldapCASecret }}
+            - name: DIB_LDAP_CA_CERTIFICATE
+              value: "/etc/dib-trust/ldap/ca.crt"
+            {{- end }}
+            {{- if .Values.tls.storkServer.enabled }}
+            - name: STORK_REST_TLS_CERTIFICATE
+              value: "/certs/cert.pem"
+            - name: STORK_REST_TLS_PRIVATE_KEY
+              value: "/certs/key.pem"
+            {{- end }}
             - name: STORK_LDAP_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -60,7 +85,99 @@ spec:
                   name: {{ .Values.credentials.secretName | quote }}
                   key: {{ .Values.credentials.databasePasswordKey | quote }}
                   {{ end }}
+            - name: DIB_STORK_DATABASE_EXTERNAL
+              value: {{ .Values.database.external.enabled | quote }}
+            - name: DIB_ALLOW_INSECURE_POSTGRESQL
+              value: {{ .Values.database.external.tls.allowInsecure | quote }}
+            {{- if .Values.database.external.enabled }}
+            - name: STORK_DATABASE_SSLMODE
+              value: {{ .Values.database.external.tls.sslMode | quote }}
+            - name: STORK_DATABASE_SSLROOTCERT
+              value: {{ ternary "/etc/stork/postgresql-tls/ca.crt" "" (ne .Values.database.external.tls.rootCertSecretName "") | quote }}
+            - name: STORK_DATABASE_SSLCERT
+              value: {{ ternary (printf "/etc/stork/postgresql-tls/%s" .Values.database.external.tls.clientCertKey) "" (ne .Values.database.external.tls.clientCertSecretName "") | quote }}
+            - name: STORK_DATABASE_SSLKEY
+              value: {{ ternary (printf "/etc/stork/postgresql-tls/%s" .Values.database.external.tls.clientKeyKey) "" (ne .Values.database.external.tls.clientCertSecretName "") | quote }}
+            {{- end }}
           ports:
-            - name: stork-http
-              containerPort: 80
+            - name: stork-rest
+              containerPort: {{ ternary 443 80 .Values.tls.storkServer.enabled }}
               protocol: TCP
+          startupProbe:
+            tcpSocket:
+              port: stork-rest
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: stork-rest
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: stork-rest
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.storkServer.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.tls.storkServer.enabled }}
+            - name: stork-server-tls
+              mountPath: /certs
+              readOnly: true
+            {{- end }}
+            {{- if $ldapCASecret }}
+            - name: ldap-ca
+              mountPath: /etc/dib-trust/ldap
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.database.external.enabled (or .Values.database.external.tls.rootCertSecretName .Values.database.external.tls.clientCertSecretName) }}
+            - name: postgresql-tls
+              mountPath: /etc/stork/postgresql-tls
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- if .Values.tls.storkServer.enabled }}
+        - name: stork-server-tls
+          secret:
+            secretName: {{ .Values.tls.storkServer.secretName | quote }}
+            defaultMode: 0400
+            items:
+              - key: {{ .Values.tls.storkServer.certificateKey | quote }}
+                path: cert.pem
+              - key: {{ .Values.tls.storkServer.privateKeyKey | quote }}
+                path: key.pem
+        {{- end }}
+        {{- if $ldapCASecret }}
+        - name: ldap-ca
+          secret:
+            secretName: {{ $ldapCASecret | quote }}
+            items:
+              - key: {{ .Values.tls.ldap.caKey | quote }}
+                path: ca.crt
+        {{- end }}
+        {{- if and .Values.database.external.enabled (or .Values.database.external.tls.rootCertSecretName .Values.database.external.tls.clientCertSecretName) }}
+        - name: postgresql-tls
+          projected:
+            defaultMode: 0400
+            sources:
+              {{- if .Values.database.external.tls.rootCertSecretName }}
+              - secret:
+                  name: {{ .Values.database.external.tls.rootCertSecretName | quote }}
+                  items:
+                    - key: {{ .Values.database.external.tls.rootCertKey | quote }}
+                      path: ca.crt
+              {{- end }}
+              {{- if .Values.database.external.tls.clientCertSecretName }}
+              - secret:
+                  name: {{ .Values.database.external.tls.clientCertSecretName | quote }}
+                  items:
+                    - key: {{ .Values.database.external.tls.clientCertKey | quote }}
+                      path: {{ .Values.database.external.tls.clientCertKey | quote }}
+                    - key: {{ .Values.database.external.tls.clientKeyKey | quote }}
+                      path: {{ .Values.database.external.tls.clientKeyKey | quote }}
+              {{- end }}
+        {{- end }}

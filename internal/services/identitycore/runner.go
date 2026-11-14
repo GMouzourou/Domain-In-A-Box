@@ -220,35 +220,55 @@ func installTLSAssets(ctx context.Context) error {
 			return err
 		}
 	}
-	if present == 0 {
-		return nil
-	}
-	if present != len(paths) {
+	if present != 0 && present != len(paths) {
 		return fmt.Errorf("custom Samba TLS requires non-empty cert.pem, key.pem, and ca.pem")
 	}
-	if err := os.MkdirAll("/var/lib/samba/private/tls", 0o755); err != nil {
-		return err
-	}
-	for _, asset := range []struct {
-		source, target string
-		mode           os.FileMode
-	}{{paths[0], "cert.pem", 0o644}, {paths[1], "key.pem", 0o600}, {paths[2], "ca.pem", 0o644}} {
-		contents, err := os.ReadFile(asset.source)
-		if err != nil {
+	if present == len(paths) {
+		if err := os.MkdirAll("/var/lib/samba/private/tls", 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join("/var/lib/samba/private/tls", asset.target), contents, asset.mode); err != nil {
+		for _, asset := range []struct {
+			source, target string
+			mode           os.FileMode
+		}{{paths[0], "cert.pem", 0o644}, {paths[1], "key.pem", 0o600}, {paths[2], "ca.pem", 0o644}} {
+			contents, err := os.ReadFile(asset.source)
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join("/var/lib/samba/private/tls", asset.target), contents, asset.mode); err != nil {
+				return err
+			}
+		}
+		if err := installTrustedCA(paths[2], "domain-in-a-box-ldap-ca.crt"); err != nil {
 			return err
 		}
 	}
-	contents, err := os.ReadFile(paths[2])
+	if path := os.Getenv("DIB_STORK_SERVER_CA_CERTIFICATE"); path != "" {
+		if err := installTrustedCA(path, "domain-in-a-box-stork-server-ca.crt"); err != nil {
+			return err
+		}
+	}
+	if present == len(paths) || os.Getenv("DIB_STORK_SERVER_CA_CERTIFICATE") != "" {
+		return run(ctx, "update-ca-certificates")
+	}
+	return nil
+}
+
+func installTrustedCA(source, name string) error {
+	contents, err := os.ReadFile(source)
 	if err != nil {
+		return fmt.Errorf("read trusted CA certificate %s: %w", source, err)
+	}
+	if len(contents) == 0 {
+		return fmt.Errorf("trusted CA certificate %s is empty", source)
+	}
+	if err := os.MkdirAll("/usr/local/share/ca-certificates", 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile("/usr/local/share/ca-certificates/domain-in-a-box-ldap-ca.crt", contents, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join("/usr/local/share/ca-certificates", name), contents, 0o644); err != nil {
 		return err
 	}
-	return run(ctx, "update-ca-certificates")
+	return nil
 }
 
 func updateSambaMetrics(path, value string) error {

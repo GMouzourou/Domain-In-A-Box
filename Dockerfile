@@ -1,4 +1,4 @@
-FROM golang:1.23 AS go-builder
+FROM golang:1.26@sha256:978e0a4e3d953662577d784471db27742f543ab09eead06839a838188c73314b AS go-builder
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -11,7 +11,13 @@ RUN go build -o /out/dib-db-ctl ./cmd/dib-db-ctl && \
     go build -o /out/dib-observability-ctl ./cmd/dib-observability-ctl && \
     go build -o /out/dib-bootstrap-ctl ./cmd/dib-bootstrap-ctl
 
-FROM ubuntu:26.04 AS builder
+FROM ubuntu:26.04@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96 AS builder
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+ARG SAMBA_COMMIT=b338f30ce090fba7eaaba589a69a2bbc34e5db8b
+# Keep the pinned source commit and archive checksum updated together.
+ARG SAMBA_ARCHIVE_SHA256=c14e36d05b59b01c19ea1ad9fbd4b4a01d1c02e25d85cd329980e9f73225df52
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -22,19 +28,22 @@ RUN apt-get update && \
         libtdb-dev libtalloc-dev libtevent-dev libgnutls28-dev libparse-yapp-perl libacl1-dev libtasn1-bin libtasn1-6-dev bison flex && \
     \
     wget --progress=dot:giga -P /tmp https://gitlab.isc.org/isc-projects/kea/-/archive/Kea-3.0.3/kea-Kea-3.0.3.tar.gz && \
+    echo "da6d9f9682f8d51c55be151b29ca3ab45cd6ce6115486fd45442200d5948255a  /tmp/kea-Kea-3.0.3.tar.gz" | sha256sum --check - && \
     tar xzf /tmp/kea-Kea-3.0.3.tar.gz -C /tmp && \
     meson setup /tmp/kea-Kea-3.0.3/build /tmp/kea-Kea-3.0.3 -Dbuildtype=plain -Ddebug=false -Dkrb5=enabled -Dmysql=disabled -Dpostgresql=disabled -Dtests=disabled -Dfuzz=disabled -Dcpp_std=gnu++23 -Dprefix=/usr && \
     meson compile -C /tmp/kea-Kea-3.0.3/build ./src/hooks/d2/gss_tsig/ddns_gss_tsig.so:shared_library && \
     \
-    wget --progress=dot:giga -P /tmp https://gitlab.com/samba-team/samba/-/archive/v4-23-stable/samba-v4-23-stable.tar.gz && \
-    tar xzf /tmp/samba-v4-23-stable.tar.gz -C /tmp
+    wget --progress=dot:giga -O "/tmp/samba-${SAMBA_COMMIT}.tar.gz" "https://gitlab.com/samba-team/samba/-/archive/${SAMBA_COMMIT}/samba-${SAMBA_COMMIT}.tar.gz" && \
+    echo "${SAMBA_ARCHIVE_SHA256}  /tmp/samba-${SAMBA_COMMIT}.tar.gz" | sha256sum --check - && \
+    tar xzf "/tmp/samba-${SAMBA_COMMIT}.tar.gz" -C /tmp && \
+    mv "/tmp/samba-${SAMBA_COMMIT}" /tmp/samba-source
 
-WORKDIR  /tmp/samba-v4-23-stable
+WORKDIR /tmp/samba-source
 
 RUN ./configure --without-ad-dc --without-ads --without-ldap --without-ldb-lmdb --without-json --without-libarchive --without-acl-support --without-pam --disable-python --with-profiling-data --with-system-mitkrb5 --with-shared-modules='!vfs_snapper' && \
     make -j"$(nproc)"
 
-WORKDIR /tmp/samba-v4-23-stable/source3/utils
+WORKDIR /tmp/samba-source/source3/utils
 
 RUN printf '%s\n' \
         '#include <stdbool.h>' \
@@ -66,14 +75,14 @@ RUN printf '%s\n' \
         -ltdb -ltalloc -ltevent \
         -Wl,-Bstatic -levent -Wl,-Bdynamic
 
-FROM ubuntu:26.04 AS core
+FROM ubuntu:26.04@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96 AS core
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 COPY --from=builder /tmp/kea-Kea-3.0.3/build/src/hooks/d2/gss_tsig/libddns_gss_tsig.so /usr/lib/x86_64-linux-gnu/kea/hooks/libddns_gss_tsig.so
-COPY --from=builder /tmp/samba-v4-23-stable/source3/utils/smb_prometheus_endpoint /usr/bin/smb_prometheus_endpoint
+COPY --from=builder /tmp/samba-source/source3/utils/smb_prometheus_endpoint /usr/bin/smb_prometheus_endpoint
 COPY --from=go-builder /out/dib-identity-core-ctl /usr/local/bin/dib-identity-core-ctl
 COPY --from=go-builder /out/dib-network-core-ctl /usr/local/bin/dib-network-core-ctl
 COPY --from=go-builder /out/dib-observability-ctl /usr/local/bin/dib-observability-ctl
@@ -136,7 +145,7 @@ EXPOSE 53 53/udp 67/udp 68/udp 88 88/udp 123/udp 135 137/udp 138/udp 139 389 389
 
 ENTRYPOINT ["/entrypoint.sh"]
 
-FROM ubuntu:26.04 AS stork
+FROM ubuntu:26.04@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96 AS stork
 
 ENV DEBIAN_FRONTEND=noninteractive
 

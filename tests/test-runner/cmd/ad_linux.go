@@ -60,25 +60,38 @@ func runADLinux(cmd *cobra.Command, args []string) error {
 		{Name: "Query domain object via LDAP", Run: func() error {
 			ldapClient := network.NewLDAPClient(cfg.DomainControllerIP).WithCredentials(
 				fmt.Sprintf("%s@%s", cfg.AdminUser, cfg.DNSDomain), cfg.AdminPassword)
-			_, err := ldapClient.SearchBase(ldapDN, "(objectClass=domain)")
-			return err
+			entries, err := ldapClient.SearchBase(ldapDN, "(objectClass=domainDNS)")
+			if err != nil {
+				return err
+			}
+			if len(entries) == 0 {
+				return fmt.Errorf("LDAP query returned no domain object for %s", ldapDN)
+			}
+			return nil
 		}},
 		{Name: "Query domain controller information", Run: func() error {
 			ldapClient := network.NewLDAPClient(cfg.DomainControllerIP).WithCredentials(
 				fmt.Sprintf("%s@%s", cfg.AdminUser, cfg.DNSDomain), cfg.AdminPassword)
-			_, err := ldapClient.SearchBase(ldapDN, "(objectClass=domain)")
-			return err
+			filter := "(&(objectCategory=computer)(userAccountControl:1.2.840.113556.1.4.803:=8192))"
+			entries, err := ldapClient.SearchSubtree(ldapDN, filter, "dNSHostName")
+			if err != nil {
+				return err
+			}
+			if len(entries) == 0 {
+				return fmt.Errorf("LDAP query returned no domain controllers for %s", ldapDN)
+			}
+			return nil
 		}},
 		{Name: "Query domain users", Run: func() error {
 			ldapClient := network.NewLDAPClient(cfg.DomainControllerIP).WithCredentials(
 				fmt.Sprintf("%s@%s", cfg.AdminUser, cfg.DNSDomain), cfg.AdminPassword)
-			searchBase := fmt.Sprintf("cn=Users,%s", ldapDN)
-			entries, err := ldapClient.SearchSubtree(searchBase, "(objectClass=*)")
+			filter := "(&(objectCategory=person)(objectClass=user))"
+			entries, err := ldapClient.SearchSubtree(ldapDN, filter, "sAMAccountName")
 			if err != nil {
-				return nil // Ignore errors - basic connectivity test
+				return err
 			}
 			if len(entries) == 0 {
-				return nil // Empty result is OK
+				return fmt.Errorf("LDAP query returned no domain users for %s", ldapDN)
 			}
 			return nil
 		}},
