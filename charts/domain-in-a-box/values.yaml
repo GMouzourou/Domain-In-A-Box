@@ -3,12 +3,12 @@
 coreImage:
   repository: ghcr.io/gmouzourou/domain-in-a-box
   pullPolicy: IfNotPresent
-  tag: "0.5.0"
+  tag: "0.5.1"
 
 storkImage:
   repository: ghcr.io/gmouzourou/domain-in-a-box-stork
   pullPolicy: IfNotPresent
-  tag: "0.5.0"
+  tag: "0.5.1"
 
 domain:
   realm: "DOMAIN.HOME.ARPA"

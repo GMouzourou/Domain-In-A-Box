@@ -11,6 +11,11 @@ metadata:
     app.kubernetes.io/component: stork-server
 spec:
   replicas: 1
+  {{- if and .Values.multus.enabled .Values.multus.storkServerNetworkName }}
+  # A static LAN address must never be held by two pods during a rollout.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "domain-in-a-box.selectorLabels" . | nindent 6 }}
