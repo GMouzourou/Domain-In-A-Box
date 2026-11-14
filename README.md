@@ -1,668 +1,212 @@
 # Domain-In-A-Box
 
-## 1. Introduction
+[![CI / CD](https://github.com/GMouzourou/Domain-In-A-Box/actions/workflows/build-and-test.yml/badge.svg)](https://github.com/GMouzourou/Domain-In-A-Box/actions/workflows/build-and-test.yml)
+[![License: AGPL-3.0](https://img.shields.io/github/license/GMouzourou/Domain-In-A-Box)](LICENSE)
+[![Helm chart](https://img.shields.io/badge/dynamic/yaml?url=https%3A%2F%2Fraw.githubusercontent.com%2FGMouzourou%2FDomain-In-A-Box%2Fmain%2Fcharts%2Fdomain-in-a-box%2FChart.yaml&query=%24.version&label=helm%20chart)](charts/domain-in-a-box)
+[![Container images](https://img.shields.io/badge/images-ghcr.io-blue?logo=github)](https://github.com/GMouzourou?tab=packages&repo_name=Domain-In-A-Box)
 
-**Domain-In-A-Box** is a containerized solution that consolidates essential network services into a single, easy-to-deploy package. It provides an **Active Directory Domain Controller**, a **DNS server**, a **DHCPv4 server with Dynamic DNS (DDNS)**, and an **NTP service**. This makes it ideal for simplifying network management in home networks, lab environments, small to medium enterprises, and edge deployments.
+**Your own Active Directory domain, DNS, DHCP and time server, in one
+container.**
 
-### Key Features
+Domain-In-A-Box packages the open-source building blocks of a Windows-style
+network into a single, tested deployment: a Samba Active Directory domain
+controller, DNS, DHCP with dynamic DNS, NTP, and a monitoring dashboard. Run
+it with Docker on one host, or on Kubernetes with the Helm chart. No Windows
+Server licence is required.
 
-- **Active Directory Domain Controller:**  
-  Leverages Samba to offer full AD DS functionality, including centralized authentication, group policy management, and user/machine account administration.
-  
-- **DNS Server:**  
-  Uses Bind9 to provide reliable and integrated DNS services that work seamlessly with the domain controller.
-  
-- **DHCPv4 Server with DDNS:**  
-  Employs Kea DHCP with dynamic DNS updates, ensuring clients receive IP addresses from a specified pool while automatically updating DNS records.
-  
-- **Time Synchronization (NTP):**  
-  Uses Chrony to provide a domain time source so Kerberos-based clients can keep their clocks aligned with the domain controller.
-  
-- **Monitoring and Management:**  
-  Uses **Stork** to provide centralized logging, alerting, and metrics collection.
-  
-- **Containerized Deployment:**  
-  Available as a Docker image on Docker Hub, Domain-In-A-Box can be deployed using Docker CLI, Docker Compose, or orchestrated in a Kubernetes environment.
-  
-- **Static IP Assignment:**  
-  Designed to run on a static IP within the same network as its clients, ensuring stable and predictable network configuration for directory services.
-  
-- **Persistent Storage:**  
-  With proper volume mounts (or persistent volumes in Kubernetes), your configuration and critical data persist across container restarts and updates.
+## Why Domain-In-A-Box?
 
-### Use Cases
+- **One deployment instead of five.** Directory, DNS, DHCP, time and
+  monitoring are configured to work together from the first start: DHCP
+  clients appear in DNS automatically, domain members get their time from the
+  domain, and Kerberos authentication works out of the box.
+- **Compatible with the tools you know.** Windows and Linux computers join the
+  domain normally. Manage users, groups, computers and Group Policy with the
+  Windows RSAT tools or `samba-tool`.
+- **Secure by default.** LDAPS and HTTPS use your own certificates, and the
+  Stork web UI uses your domain accounts. Insecure modes require an explicit
+  opt-in.
+- **Reproducible.** The configuration lives in a `.env` file or Helm values
+  file, data lives on persistent volumes, and every change is tested in CI
+  with DNS, DHCP, LDAP and Kerberos checks and a Linux client domain join.
+- **Grows with you.** Start with a single Docker host. Move to Kubernetes when
+  you want declarative installs, and try the experimental two-controller mode
+  when you want to keep sign-in and DNS running through a host failure.
 
-- **Home Networks:**  
-  Perfect for tech-savvy households seeking a centralized directory, name resolution, and IP management solution.
-  
-- **Lab Environments:**  
-  Ideal for testing Active Directory configurations, networking practices, or learning container orchestration.
-  
-- **Small to Medium Enterprises:**  
-  A low-overhead solution that reduces hardware requirements while delivering robust network services.
-  
-- **Edge Deployments:**  
-  Suitable for remote sites or branch offices where a single, self-contained service bundle can simplify network management.
+## Features
 
-### Overview
+| Area | What you get |
+| --- | --- |
+| **Active Directory** | Samba AD DC: users, groups and computers, Kerberos, LDAP and LDAPS, SYSVOL and NETLOGON shares, Group Policy |
+| **DNS** | AD-integrated DNS zones, with BIND9 forwarding other names to the upstream resolvers you choose |
+| **DHCP** | Kea DHCPv4 with dynamic DNS: clients register in AD DNS using secure (GSS-TSIG) updates |
+| **Time** | Chrony NTP server for domain members |
+| **Monitoring** | ISC Stork web dashboard for DHCP and DNS, signed in with your domain accounts, plus Prometheus metrics for Samba, BIND and Kea |
+| **Deployment** | Docker Compose, Docker CLI or a Helm chart; `linux/amd64` images on GitHub Container Registry |
+| **Redundancy** *(experimental)* | A second domain controller on another host, with one-way SYSVOL synchronization and a Kea hot-standby DHCP pair |
 
-This guide is organized into five parts:
-1. **Introduction:** Provides a high-level overview of the project and its features.
-2. **Kubernetes:** Shows how to deploy Domain-In-A-Box in a Kubernetes cluster with persistent volumes and static IP configuration using Multus.
-3. **Docker Compose:** Details deploying the container with Docker Compose, including volume bind mounts and network settings.
-4. **Docker CLI:** Walks through running Domain-In-A-Box using raw Docker commands.
-5. **Additional Considerations:** Notes on security and configuration.
+## Use cases
 
-Each section includes guidance on configuration options that are most likely to need customization, ensuring you can tailor the deployment to your specific environment.
+- **Home networks and homelabs:** single sign-on for family or lab computers,
+  local DNS names for every device, and one place to manage it all.
+- **Learning and testing:** practise Active Directory, Group Policy, Kerberos
+  and DNS administration, or test software against a real domain, without
+  Windows Server.
+- **Small offices:** a low-cost directory and network-services server on
+  modest hardware.
+- **Branch and edge sites:** a self-contained services bundle that can be
+  deployed and rebuilt from configuration.
 
-### Current Project Status
+## How it works
 
-The repository now includes a Docker-based integration test stack under `tests/` that validates:
+The controller runs with its own address on your LAN, so clients see it as an
+ordinary domain controller, DNS server and DHCP server.
 
-- service health (`DNS`, `LDAP`, `Kerberos`, `SMB`, `DHCP`)
-- Active Directory queries over LDAP/LDAPS
-- Linux domain join using `realmd`, `adcli`, and `sssd`
-- DNS forward and reverse resolution
+```mermaid
+flowchart LR
+    clients["Windows and Linux clients"]
+    upstream["Upstream DNS resolvers"]
 
-**Latest verified result:**
+    subgraph controller["Domain-In-A-Box controller (one LAN address)"]
+        samba["Samba AD DC<br/>LDAP, Kerberos, SMB<br/>AD DNS on port 53"]
+        bind["BIND9<br/>forwarder"]
+        kea["Kea DHCPv4<br/>and DDNS"]
+        chrony["Chrony NTP"]
+        agent["Stork agent"]
+    end
+
+    subgraph monitoring["Monitoring (optional)"]
+        stork["Stork server<br/>web UI"]
+        pg[("PostgreSQL")]
+    end
+
+    clients -- "DNS, sign-in, files, Group Policy" --> samba
+    clients -- "DHCP" --> kea
+    clients -- "time" --> chrony
+    samba -- "other names" --> bind
+    bind --> upstream
+    kea -- "secure DNS updates" --> samba
+    agent <--> stork
+    stork --> pg
+    stork -. "LDAPS sign-in" .-> samba
+```
+
+The domain keeps running if the monitoring components are unavailable.
+
+## How it compares
+
+| | Domain-In-A-Box | Windows Server | Separate tools (router DHCP, Pi-hole, manual Samba) |
+| --- | --- | --- | --- |
+| Licence cost | Free (AGPL-3.0) | Windows Server licence and CALs | Free |
+| Hardware | One Linux host or an existing Kubernetes cluster | A Windows host or VM per domain controller | Several devices or services |
+| Integration | DNS, DHCP, DDNS, time and monitoring configured together and tested | Integrated | You integrate and maintain each piece |
+| Deployment | Configuration file and one command | Interactive installation and promotion | Individual setup for each tool |
+| AD compatibility | Samba AD: covers common domain, Kerberos, LDAP and Group Policy needs | Complete | Depends on your Samba setup |
+| Multi-controller redundancy | Experimental | Mature, with automatic SYSVOL replication (DFS-R) | Manual |
+
+Samba does not implement every Windows Server feature; for example, it has no
+DFS-R SYSVOL replication. If you need full Windows Server compatibility or a
+production-grade multi-site directory, use Windows Server.
+
+## Choose your deployment
+
+| | Docker | Kubernetes | Multi-controller Kubernetes |
+| --- | --- | --- | --- |
+| **Status** | Supported | Supported | **Experimental** |
+| **Best for** | Home networks, labs, one small site | Teams already running Kubernetes | Evaluating redundancy in a lab |
+| **You need** | One Linux host with Docker | A cluster with Multus and persistent storage | Two physical nodes, node-pinned storage, two LAN addresses |
+| **Domain controllers** | One | One | Two |
+| **Monitoring** | Docker Compose includes Stork; Docker CLI is core-only | Stork included | Shared Stork server |
+| **Survives the loss of a host** | No | No (unless storage is replicated, see below) | Sign-in, DNS and Group Policy reads continue; DHCP needs a manual step |
+
+### Services and what to expect
+
+| Service | Docker and Kubernetes | Multi-controller Kubernetes |
+| --- | --- | --- |
+| **Sign-in, directory, DNS** | Available while the controller runs. | Both controllers serve; clients use the survivor automatically when one fails. |
+| **Group Policy** | Available while the controller runs. | Applied from either controller. Edits are only possible on the primary, so they are blocked while it is down. |
+| **DHCP** | Available while the controller runs. Existing leases continue during an outage. | Served by the primary only. If the primary is down for longer than clients can tolerate, an operator [takes over DHCP](docs/operator-procedures.md#take-over-dhcp-on-the-secondary) on the secondary after confirming the primary is off. |
+| **Time** | Available while the controller runs. | Both controllers serve time. |
+| **Monitoring** | Optional. A monitoring outage never affects the other services. | Optional. A monitoring outage never affects the other services. |
+| **Operator involvement** | Fix or replace the host, restore from backup if data is lost. | Rarely needed, but some steps require care: never run DHCP on both controllers, and never restore one controller from a backup. |
+| **Main risks** | A single point of failure: when the controller is down, new sign-ins without cached credentials, DNS and new DHCP leases stop. | Changes held only by a controller that is destroyed before replicating are lost. Taking over DHCP while the primary is still running can cause duplicate addresses. |
+
+Full details, including every consequence and accepted risk, are in
+[Multi-controller Kubernetes](docs/multi-controller.md#service-behaviour-and-consequences).
+
+### Disruptive events
+
+| Event | Docker and Kubernetes | Multi-controller Kubernetes |
+| --- | --- | --- |
+| **A service process crashes** | Restarted automatically inside the controller. Repeated failures need a manual restart for now ([#48](https://github.com/GMouzourou/Domain-In-A-Box/issues/48)). | Same, and the other controller keeps serving. |
+| **Controller restart or upgrade** | Brief outage until the controller is ready again. | No interruption to sign-in or DNS; Group Policy edits and DHCP pause only while the primary restarts. |
+| **Host reboot** | Outage until the host and controller are back. | The other controller keeps serving. In testing, the rebooted controller was back within about 4.5 minutes. |
+| **Host permanently lost** | Domain unavailable. Rebuild from a backup ([#41](https://github.com/GMouzourou/Domain-In-A-Box/issues/41)). On Kubernetes with replicated storage, the controller can restart on another node ([#39](https://github.com/GMouzourou/Domain-In-A-Box/issues/39)). | The survivor keeps serving. Remove the lost controller and join a new one. If the primary is lost, Group Policy cannot be edited until promotion is supported ([#40](https://github.com/GMouzourou/Domain-In-A-Box/issues/40)). |
+| **Network split between controllers** | Not applicable. | Both keep serving clients and resynchronize when the network recovers. |
+| **Monitoring outage** | No effect on domain services. | No effect on domain services. |
+| **Power cut to all hosts** | Services return with the hosts. | Services return with the hosts. Physical power-loss testing is still to do ([#42](https://github.com/GMouzourou/Domain-In-A-Box/issues/42)). |
+
+## Quick start
+
+On a Linux host with Docker Compose:
 
 ```bash
-make test-all
+git clone https://github.com/GMouzourou/Domain-In-A-Box.git
+cd Domain-In-A-Box
+cp .env.example .env
 ```
 
-This was re-run successfully and finished with:
-
-```text
-Passed: 5/5
-✓ Tests complete
-```
-
-You can also run focused suites from the repository root:
-
-```bash
-make test-health
-make test-dns
-make test-dhcp
-make test-ad
-make test-ad-linux
-```
-
-For test-environment details, see [`tests/README.md`](tests/README.md).
-
-> **Note:** The provided `docker-compose.yml` and `kubernetes.yml` are still environment-specific. Review interface names, static IPs, gateways, and passwords before using the project outside a lab setup.
->
-> For Docker Compose, copy `.env.example` to `.env` and adjust the `DIB_*` values before starting the stack.
-
-## 2. Kubernetes
-
-This section describes how to deploy Domain-In-A-Box on Kubernetes. In a production environment, you'll leverage persistent volumes for storing configuration and data, and use Multus (or another CNI plugin) to assign a static IP address that matches your physical network.
-
-### Prerequisites
-
-- **Kubernetes Cluster:**  
-  Ensure you have access to a Kubernetes cluster. The guide assumes you are familiar with basic cluster operations (using `kubectl`).
-
-- **Multus CNI Plugin (or Equivalent):**  
-  For static IP assignment on the same network as your clients, Multus is used to attach an additional macvlan interface to your pod. You must have a [NetworkAttachmentDefinition](https://docs.openshift.com/container-platform/4.6/networking/multiple_networks/about-multus.html) in your cluster configured for this purpose.
-
-- **Storage Class:**  
-  Your cluster should have a StorageClass (or default dynamic provisioning setup) in place to support persistent volumes, which will be used to store critical data and configuration files.
-
-### Overview of the Kubernetes Resources
-
-1. **NetworkAttachmentDefinition:**  
-   This custom resource (CRD) is used by Multus to instruct the pod to obtain an additional interface with a static IP. Our sample configuration creates a macvlan interface that brings your pod into the same physical network as your clients.  
-   - **Key elements:**  
-     - `master`: Defines the host interface (for example, `eth0`) on each node.  
-     - `ipam`: Configured in static mode with the assigned IP, subnet mask, gateway, and—if your CNI does not add it automatically—a route for the attached LAN subnet.
-
-2. **Headless Service:**  
-   The headless Service provides stable DNS names for the StatefulSet inside the cluster. LAN clients should still use the Multus/macvlan IP rather than the Kubernetes Service IP.
-
-3. **StatefulSet:**  
-   A StatefulSet is used because Domain-In-A-Box is a stateful application. It ensures:
-   - **Unique, Stable Identity:** The pod keeps a consistent hostname and DNS entry.
-   - **Persistent Storage:** Volume claim templates are defined for each of the persistent directories (for BIND, Kea, Samba, and logs).
-   - **Static IP Assignment:** The pod annotations request the static IP via Multus by referencing the NetworkAttachmentDefinition.
-
-### Cluster Assumptions and Caveats
-
-- **Single replica only:** Active Directory, BIND, and DHCP are configured here as a single stateful node. Do not scale the `StatefulSet` above `1` without designing replication explicitly.
-- **Layer-2 networking matters:** If you want LAN clients to use the pod for DHCP and normal AD/DNS traffic, Multus/macvlan (or an equivalent L2 attachment) is required. A normal ClusterIP Service is not enough for DHCP.
-- **Interface naming:** The example sets `DIB_INTERFACE=net1`, which is the common Multus secondary interface name. If your CNI names it differently, this value will need updating.
-- **Privileged workload:** The container is intentionally privileged because Samba AD DC, BIND, and Kea need low-level networking access.
-- **Persistent storage:** The sample assumes a `ReadWriteOnce` storage class. You may need to add `storageClassName` if your cluster does not provide a suitable default storage class.
-- **Firewalling and service reachability:** When clients use the Multus/macvlan IP directly, allow the AD/DC ports on your network path: `53/tcp+udp`, `67/udp`, `68/udp`, `88/tcp+udp`, `123/udp`, `135/tcp`, `137/udp`, `138/udp`, `139/tcp`, `389/tcp+udp`, `445/tcp`, `464/tcp+udp`, `636/tcp`, `9119/tcp`, `9547/tcp`, `9922/tcp`, `3268/tcp`, `3269/tcp`, and the fixed Samba RPC range `49152-49252/tcp`. The Stork server and agent use Kubernetes Services on the primary pod network; the agent is not exposed on the LAN.
-
-Multi-controller redundancy is not supported. The staged design review,
-prototype gates, and unresolved safety decisions are documented in
-[`REDUNDANCY-DESIGN.md`](REDUNDANCY-DESIGN.md).
-
-### Step-by-Step Instructions
-
-1. **Create the NetworkAttachmentDefinition:**
-
-   First, apply the NetworkAttachmentDefinition YAML to your cluster. This resource is essential for the pod to be assigned a static IP on your physical network. (Customize the `master` interface and address details as needed.)
-
-   ```yaml
-   apiVersion: k8s.cni.cncf.io/v1
-   kind: NetworkAttachmentDefinition
-   metadata:
-     name: macvlan-network
-   spec:
-     config: |-
-       {
-         "cniVersion": "0.3.1",
-         "name": "macvlan-network",
-         "type": "macvlan",
-         "mode": "bridge",
-         "master": "eth0",
-         "ipam": {
-           "type": "static",
-           "addresses": [
-             {
-               "address": "192.168.1.1/24",
-               "gateway": "192.168.1.254"
-             }
-           ],
-           "routes": [
-             {
-               "dst": "192.168.1.0/24",
-               "gw": "192.168.1.254"
-             }
-           ]
-         }
-       }
-   ```
-
-   Apply this file using:
+1. Edit `.env`: set your domain name, three unique passwords, your host's LAN
+   interface and a free DHCP range.
+2. Edit the addresses in `docker-compose.yml` to match your LAN.
+3. Create certificates in `./certs`, as described in
+   [Certificates](docs/certificates.md).
+4. Disable any other DHCP server on the LAN, or set `DIB_DHCP_ENABLED=false`.
+5. Start the stack:
 
    ```bash
-   kubectl apply -f <your_networkattachmentdefinition_file.yaml>
+   docker compose up -d
    ```
 
-2. **Deploy the Headless Service and StatefulSet:**
-
-   The provided YAML defines a headless Service and a StatefulSet. The Service (`domain-server-svc`) is used for stable in-cluster DNS identity, while the `StatefulSet` requests the Multus/macvlan IP directly via pod annotations. The `StatefulSet` deploys a single replica of Domain-In-A-Box with persistent volumes via PVC templates.
-
-   Create the administrator password Secret before applying the manifest. Provide the password from a secret manager or shell environment; do not commit it in a manifest:
-
-   ```bash
-   : "${DIB_DOMAIN_ADMIN_PASSWORD:?Set DIB_DOMAIN_ADMIN_PASSWORD}"
-   kubectl create namespace domain-in-a-box
-   kubectl -n domain-in-a-box create secret generic domain-in-a-box-secret \
-     --from-literal=domain-admin-password="$DIB_DOMAIN_ADMIN_PASSWORD"
-   kubectl apply -f <your_kubernetes_file.yaml>
-   ```
-
-   **What to Customize:**  
-  - **Environment Variables:** Adjust the `DIB_REALM`, `DIB_DOMAIN`, `DIB_INTERFACE`, and other environment variables to suit your environment. Supply passwords via Kubernetes Secrets, and keep `DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART` set to `false` unless you explicitly want to overwrite the domain password on every restart. Metrics-related knobs are `DIB_SAMBA_METRICS_ENABLED` and `DIB_SAMBA_METRICS_PORT` (default `9922`).
-   - **Multus/macvlan settings:** Update `master`, the static IP, the gateway, and the `routes` entry to match your LAN. This is especially important when the cluster keeps its default route on a different interface.
-   - **Persistent Storage:** The sample starter values are `32Mi`-scale config PVCs, `1Gi` for `samba-data`, and `2Gi` for logs. Increase the `storage` values and set `storageClassName` as needed for your environment.
-   - **Resources:** For a small lab cluster, a reasonable starting point is `500m` CPU / `1Gi` memory requested and up to `2` CPU / `4Gi` memory limited.
-
-3. **Verifying the Deployment:**
-
-   - **Check StatefulSet Status:**  
-     Run `kubectl get statefulset` to ensure the pod is created and running.
-   - **Inspect the Pod’s Network Interface:**  
-     Use `kubectl describe pod <pod-name>` to confirm that the pod’s annotations request and receive the expected static IP.  
-   - **Check Persistent Volumes:**  
-     Use `kubectl get pvc` to see that the volume claims are bound.
-
-### Deploying via Helm Chart
-
-A Helm chart is provided under `charts/domain-in-a-box/` for installing Domain-In-A-Box on Kubernetes or RKE2 clusters.
-
-```bash
-: "${DIB_DOMAIN_ADMIN_PASSWORD:?Set DIB_DOMAIN_ADMIN_PASSWORD}"
-: "${STORK_DATABASE_PASSWORD:?Set STORK_DATABASE_PASSWORD}"
-: "${DIB_LDAP_PASSWORD:?Set DIB_LDAP_PASSWORD}"
-kubectl create namespace domain-in-a-box
-kubectl -n domain-in-a-box create secret generic domain-in-a-box-credentials \
-  --from-literal=domain-admin-password="$DIB_DOMAIN_ADMIN_PASSWORD" \
-  --from-literal=stork-db-password="$STORK_DATABASE_PASSWORD" \
-  --from-literal=stork-ldap-password="$DIB_LDAP_PASSWORD"
-
-kubectl -n domain-in-a-box create secret generic domain-in-a-box-controller-tls \
-  --from-file=tls.crt=./certs/controller/tls.crt \
-  --from-file=tls.key=./certs/controller/tls.key \
-  --from-file=ca.crt=./certs/controller/ca.crt
-kubectl -n domain-in-a-box create secret generic domain-in-a-box-stork-server-tls \
-  --from-file=tls.crt=./certs/stork-server/tls.crt \
-  --from-file=tls.key=./certs/stork-server/tls.key \
-  --from-file=ca.crt=./certs/stork-server/ca.crt
-
-helm install domain-in-a-box ./charts/domain-in-a-box \
-  --namespace domain-in-a-box \
-  --set multus.address="192.168.1.1/24" \
-  --set multus.gateway="192.168.1.254"
-```
-
-Create these Secrets before installing the chart and provide unique, strong password values through your secret manager or shell environment. The chart does not create credentials or ship with default passwords. Set `credentials.secretName` and the three key values if you use a differently named credentials Secret.
-
-#### External PostgreSQL Integration (Optional)
-
-If your Kubernetes cluster already runs an external PostgreSQL cluster (such as a shared database instance in RKE2 used by Gitea or other apps), configure Stork to use a hostname-verified TLS connection instead of the chart-managed PostgreSQL StatefulSet:
-
-```bash
-helm install domain-in-a-box ./charts/domain-in-a-box \
-  --set database.external.enabled=true \
-  --set database.external.host="postgresql.default.svc.cluster.local" \
-  --set database.external.port=5432 \
-  --set database.external.name="stork" \
-  --set database.external.user="stork" \
-  --set database.external.passwordSecret.name="postgres-credentials" \
-  --set database.external.passwordSecret.key="password" \
-  --set database.external.tls.sslMode="verify-full" \
-  --set database.external.tls.rootCertSecretName="postgres-ca"
-```
-
-The `postgres-ca` Secret must contain the CA certificate under the configured
-`rootCertKey`. A DNS database host must match a DNS SAN in its certificate; an
-IP-address host must match an IP SAN:
-
-```bash
-helm upgrade --install domain-in-a-box ./charts/domain-in-a-box \
-  --namespace domain-in-a-box \
-  --set database.external.enabled=true \
-  --set database.external.host="postgresql.default.svc.cluster.local" \
-  --set database.external.passwordSecret.name="postgres-credentials" \
-  --set database.external.tls.sslMode="verify-full" \
-  --set database.external.tls.rootCertSecretName="postgres-ca"
-```
-
-The optional `database.external.tls.clientCertSecretName` supports PostgreSQL
-client-certificate authentication. Its Secret must contain the configured
-client certificate and private-key keys. The chart references Secrets and
-mounts their contents at runtime; private keys and passwords are not stored in
-Helm values or rendered manifests. `verify-ca` and `verify-full` require a root
-CA Secret. `require` encrypts the connection but does not verify the database
-hostname.
-
-#### Controller and Stork TLS
-
-The chart accepts existing Secrets and does not generate or publish
-certificates. Configure separate controller and Stork server certificates;
-they may be issued by the same CA, but must not share a private key. The
-controller Secret defaults to keys `tls.crt`, `tls.key`, and `ca.crt`. The
-Stork server Secret defaults to `tls.crt` and `tls.key`; its CA defaults to
-`ca.crt` in that Secret and is mounted into the controller's trust store for
-verified HTTPS registration. Key names and CA Secret references can be
-overridden with the `tls.*` values.
-
-Verified LDAPS and HTTPS registration are enabled by default. The default
-controller and Stork TLS Secret names are shown here; both Secrets must exist
-before the pods can start:
-
-```yaml
-tls:
-  controller:
-    secretName: domain-in-a-box-controller-tls
-  storkServer:
-    enabled: true
-    secretName: domain-in-a-box-stork-server-tls
-  ldap:
-    skipServerVerification: false
-```
-
-The LDAP CA defaults to the controller Secret's `ca.crt`. For a separate CA,
-set `tls.ldap.caSecretName` and `tls.ldap.caKey`. The LDAP `serverName` value,
-when overridden, is used in the LDAPS URL and must be present in the
-controller certificate's DNS SANs. By default it is the controller Service
-FQDN `<release>-domain-in-a-box-svc.<namespace>.svc.cluster.local`.
-`tls.ldap.skipServerVerification` defaults to `false`; the chart requires a CA
-Secret when verification is enabled. Stork REST TLS is configured independently
-and does not implicitly alter LDAP verification.
-
-The Stork REST certificate must cover
-`<release>-domain-in-a-box-stork-server.<namespace>.svc.cluster.local`
-(or the actual Service FQDN rendered by Helm). The agent registers over
-verified HTTPS on port `443` by default. Disabling HTTPS requires setting
-`tls.storkServer.allowInsecureHttp: true`; this is intended only for isolated
-tests.
-
-External PostgreSQL defaults to `verify-full` and requires a CA Secret. The
-`disable` and `require` modes, LDAP verification bypass, and Stork HTTP can be
-used only with their corresponding `allowInsecure` value explicitly enabled.
-These options weaken transport security and should not be used in production.
-
-The controller's resource requests and limits are configured with the top-level
-`resources` value. Stork server resources use `storkServer.resources`, and the
-bundled PostgreSQL resources use `database.internal.resources`; each supports
-`requests` and `limits`. The bundled PostgreSQL image is digest-pinned by
-default and can be updated through `database.internal.image`.
-
-The Stork agent callback is a headless Service on port `8081`, advertised
-using its stable in-cluster FQDN. Its DNS record follows the controller pod
-when it is rescheduled. The headless endpoint also lets Stork's registration
-ping listener bind to the controller pod IP while the server stores the
-stable DNS name. No Stork-server macvlan attachment or additional LAN IP is
-needed for this path. The agent port is not exposed outside the cluster. The
-Stork UI Service is ClusterIP; use an Ingress or a local port-forward to
-access it, for example:
-
-Set `clusterDNS.domain` to the Kubernetes cluster DNS suffix if it differs
-from `cluster.local`; an empty value also falls back to `cluster.local` so the
-controller's BIND resolver continues to resolve internal Service names.
-
-```bash
-kubectl -n domain-in-a-box port-forward service/domain-in-a-box-stork-server 8080:80
-# For Stork REST TLS, use: 8443:443
-```
-
-TLS Secret rotation does not guarantee live reload. Samba copies the
-controller certificate and CA into persistent state, and both Samba and the
-Stork server load certificates/trust at startup. After updating Secrets,
-restart the controller StatefulSet and Stork server Deployment in a controlled
-maintenance window. For an existing release whose Stork agent was registered
-with its old LAN address, first remove that machine entry from Stork, delete
-`/var/lib/stork-agent/.stork-agent-registered` in the controller pod, then
-restart it so it registers the stable Service address. The stored agent
-credentials can be retained.
-
-### Additional Considerations
-
-- **Security Context:**  
-  The container is run with privileged access as required by Domain-In-A-Box. Evaluate if this setting fits your security policies and adjust accordingly.
-
-- **Networking Plugins:**  
-  If your Kubernetes environment does not support Multus, you may need to explore alternative networking setups (for example, using hostNetwork mode) to achieve static IP assignment.
-
-- **Monitoring and Logging:**  
-  Ensure you have mechanisms to monitor the StatefulSet and its persistent storage, as the domain controller is critical to your network's operation.
-
-## 3. Docker Compose
-
-Deploying Domain-In-A-Box using Docker Compose is a quick and efficient way to get your domain controller, DNS server, DHCPv4/DDNS server, and Stork monitoring solution running on a single host. The provided `docker-compose.yml` file is pre-configured with persistent volumes, static IP assignment via a macvlan network, as well as the necessary environment variables. Below are the details to help you customize and deploy the solution.
-
-### Prerequisites
-
-- **Docker Engine & Docker Compose:**  
-  Ensure you have Docker and Docker Compose installed on your host.
-
-- **Network Interface:**  
-  Your host should have a physical network interface (e.g., `eth0`) that supports macvlan networking. Modify the `parent` property in the network configuration if your interface is named differently.
-
-### Customization Options
-
-The `docker-compose.yml` file includes several settings that you might want to adjust:
-
-- **Static IP:**  
-  Under the `services.domain-controller.networks.domain_net.ipv4_address` section, the static IP is set to `192.168.1.1`.
-  *Change this value if your network plan requires a different IP for the domain controller.*
-
-- **Environment Variables:**  
-  - **DIB_REALM:** Specify your Active Directory Kerberos realm (e.g., `"DOMAIN.HOME.ARPA"`).
-  - **DIB_DOMAIN:** Define your short domain name (e.g., `"DOMAIN"`).
-  - **DIB_DOMAIN_ADMIN_PASSWORD:** Set a unique domain administrator password used during provisioning.
-  - **DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:** Set to `true` only if you want container restarts to re-sync the Administrator password from the environment.
-  - **DIB_INTERFACE:** Specify the interface to be used by your domain controller (e.g., `"eth0"`).
-  - **DIB_DHCP_POOL:** Specify the range of IP addresses to be leased (e.g., `"192.168.1.100-192.168.1.199"`); updates are applied on restart.
-  - **DIB_DNS_FORWARDERS:** List upstream DNS servers (separated by semicolons); updates are applied on restart.
-  - **DIB_SAMBA_METRICS_ENABLED:** Enables `smb_prometheus_endpoint` (default `true`).
-  - **DIB_SAMBA_METRICS_PORT:** Samba Prometheus exporter port (default `9922`).
-  - **DIB_BOOTSTRAP_TIMEOUT_SECONDS:** Maximum time for post-start dependency checks before bootstrap fails (default `120`).
-  - **Stork integration:** The core image does not include a PostgreSQL server or Stork server. Leave `STORK_SERVER_HOST` unset to run the core-only Docker CLI deployment without Stork. To enable Stork, configure its HTTPS server endpoint, trusted CA, and PostgreSQL endpoint. Set `DIB_STORK_DATABASE_EXTERNAL` explicitly when configuring a database host; external PostgreSQL requires `verify-full` and a CA by default.
-  - **STORK_DATABASE_HOST / STORK_DATABASE_PORT:** Connection details for the PostgreSQL database used by Stork. In Docker Compose the database service is `postgres`; set these explicitly when using an external database.
-  - **STORK_DATABASE_NAME / STORK_DATABASE_USER_NAME / STORK_DATABASE_PASSWORD:** Stork database authentication credentials.
-
-  Docker Compose enables verified Stork HTTPS and LDAPS by default. Provide
-  read-only certificate files under `./certs/controller` (`cert.pem`,
-  `key.pem`, `ca.pem`) and `./certs/stork-server` (`cert.pem`, `key.pem`,
-  `ca.crt`). The controller certificate must cover the configured LDAPS
-  endpoint (`192.168.1.1` by default), and the
-  Stork certificate must cover `192.168.1.3` (or the configured
-  `STORK_SERVER_HOST`). For an external PostgreSQL service, set
-  `DIB_STORK_DATABASE_EXTERNAL=true`, `STORK_DATABASE_SSLMODE=verify-full`,
-  and provide its CA at `./certs/postgresql/ca.crt`. Plain HTTP or skipped
-  certificate verification is blocked unless its explicit
-  `DIB_ALLOW_INSECURE_*` opt-in is enabled.
-
-  Existing Samba, BIND, Kea, and Stork configuration files are preserved. On restart, Domain-In-A-Box reconciles only its managed values: the Samba metrics setting and optional Administrator password, BIND forwarders, and the Kea DHCP pool for subnet ID `1`.
-
-  Docker Compose starts the bundled `postgres:18-alpine` service by default. To use an existing PostgreSQL service instead, set the `STORK_DATABASE_*` variables in `.env` and start only the core and Stork services:
-
-  ```bash
-  docker compose up -d domain-controller stork-server
-  ```
-
-- **Persistent Volumes:**  
-  The following named volumes are used to persist configuration and data:
-  - `bind-config` → `/etc/bind`
-  - `bind-data` → `/var/cache/bind`
-  - `chrony-config` → `/etc/chrony`
-  - `chrony-data` → `/var/lib/chrony`
-  - `kea-config` → `/etc/kea`
-  - `kea-data` → `/var/lib/kea`
-  - `stork-config` → `/etc/stork`
-  - `stork-data` → `/var/lib/stork-agent` (agent certificates, private key, token, and bootstrap markers). Bootstrap transfers ownership of the registered credentials to the `stork-agent` user before marking registration complete.
-  - `samba-data` → `/var/lib/samba` (also persists `/etc/samba` via startup symlink)
-  - `log-data` → `/var/log`  
-  *You can change these to host bind mounts if you prefer direct access to the underlying directories.*
-
-- **Network Settings:**  
-  In the `networks.domain_net` section:
-  - **parent:** The host interface for macvlan (default is `eth0` in the example).
-  - **subnet & gateway:** These are set according to your local network. Adjust the `subnet` (e.g., `"192.168.1.0/24"`) and `gateway` (e.g., `"192.168.1.254"`) as needed.
-
-- **Ports and Firewalling:**  
-  Because the container appears directly on the LAN through macvlan, the Compose example does not publish host ports with a `ports:` block. Ensure that your LAN/firewall policy allows the required AD/DC traffic, including `123/udp` for NTP, `9119/tcp` for BIND metrics, `9547/tcp` for Kea metrics, `9922/tcp` for Samba Prometheus metrics, and the fixed Samba RPC range `49152-49252/tcp`.
-
-### Step-by-Step Deployment
-
-1. **Prepare the Environment:**
-   - Clone or copy the repository containing the `docker-compose.yml` file.
-   - Copy `.env.example` to `.env`.
-   - Adjust the `DIB_*` values in `.env` to match your environment, especially the password, interface, subnet, gateway, and static IP.
-
-2. **Start the Container:**
-   - Run the following command to launch Domain-In-A-Box in detached mode:
-     ```bash
-     docker-compose up -d
-     ```
-
-3. **Monitor the Deployment:**
-   - Check the status of your container with:
-     ```bash
-     docker-compose ps
-     ```
-   - View real-time logs to ensure services are starting properly:
-     ```bash
-     docker-compose logs -f
-     ```
-
-4. **Managing the Deployment:**
-   - To stop the services:
-     ```bash
-     docker-compose down
-     ```
-   - To restart:
-     ```bash
-     docker-compose restart
-     ```
-   - Changes to `DIB_DHCP_POOL` and `DIB_DNS_FORWARDERS` are re-applied on restart without reprovisioning the domain.
-   - To also re-sync the Administrator password from the environment on restart, set `DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART=true`.
-
-### Example `docker-compose.yml` (Excerpt)
-
-```yaml
-services:
-  domain-controller:
-    image: gmouzourou/domain-in-a-box:latest
-    hostname: domain-server
-    container_name: domain-in-a-box
-    privileged: true
-    networks:
-      domain_net:
-        ipv4_address: 192.168.1.1  # Change if needed to match your network plan
-    environment:
-      DIB_REALM: "${DIB_REALM:-DOMAIN.HOME.ARPA}"
-      DIB_DOMAIN: "${DIB_DOMAIN:-DOMAIN}"
-      DIB_DOMAIN_ADMIN_PASSWORD: "${DIB_DOMAIN_ADMIN_PASSWORD:?Set DIB_DOMAIN_ADMIN_PASSWORD in .env}"
-      DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART: "${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
-      DIB_INTERFACE: "${DIB_INTERFACE:-eth0}"
-      DIB_DHCP_POOL: "${DIB_DHCP_POOL:-192.168.1.100-192.168.1.199}"
-      DIB_DNS_FORWARDERS: "${DIB_DNS_FORWARDERS:-1.1.1.1; 8.8.8.8;}"
-      DIB_SAMBA_METRICS_ENABLED: "${DIB_SAMBA_METRICS_ENABLED:-true}"
-      DIB_SAMBA_METRICS_PORT: "${DIB_SAMBA_METRICS_PORT:-9922}"
-    volumes:
-      - bind-config:/etc/bind
-      - bind-data:/var/cache/bind
-      - chrony-config:/etc/chrony
-      - chrony-data:/var/lib/chrony
-      - kea-config:/etc/kea
-      - kea-data:/var/lib/kea
-      - stork-config:/etc/stork
-      - stork-data: /var/lib/stork-agent
-      - samba-data:/var/lib/samba
-      - log-data:/var/log
-
-networks:
-  domain_net:
-    driver: macvlan
-    driver_opts:
-      parent: eth0  # Replace with your actual network interface
-    ipam:
-      config:
-        - subnet: "192.168.1.0/24"  # Adjust to fit your local network
-          gateway: "192.168.1.254"    # Change this if your gateway is different
-
-volumes:
-  bind-config:
-  bind-data:
-  chrony-config:
-  chrony-data:
-  kea-config:
-  kea-data:
-  stork-config:
-  stork-data:
-  samba-data:
-  log-data:
-```
-## 4. Docker CLI
-
-Deploying Domain-In-A-Box directly via the Docker CLI runs the core AD/DNS/DHCP/NTP services without Stork. The core image does not bundle a PostgreSQL or Stork server; use Docker Compose or provide a separately configured Stork server and database when you need monitoring. This section outlines how to set up the necessary network, run the container with the required options, and manage the deployment.
-
-### Prerequisites
-
-- **Docker Engine:**  
-  Ensure you have Docker installed and running on your host.
-
-- **Sufficient Privileges:**  
-  Running the container in privileged mode requires root access or appropriate permissions.
-
-- **Macvlan Network Support:**  
-  Your Docker host must support macvlan networking to assign a static IP address on the physical network. Create a custom network if it doesn't already exist.
-
-### Step-by-Step Instructions
-
-#### 1. Create the Docker Macvlan Network
-
-Before running the container, create a Docker network that uses the macvlan driver. This network will allow you to assign a static IP address to the container.
-
-```bash
-docker network create -d macvlan \
-  --subnet=192.168.1.0/24 \
-  --gateway=192.168.1.254 \
-  -o parent=eth0 \
-  domain_net
-```
-
-*Adjust the subnet, gateway, and `parent` interface (e.g., `eth0`) to fit your local network configuration.*
-
-#### 2. Run the Domain-In-A-Box Container
-
-Use the following command to run the container with the necessary settings:
-
-```bash
-docker run -d \
-  --name domain-in-a-box \
-  --privileged \
-  --network domain_net \
-  --hostname domain-server \
-  --ip 192.168.1.1 \
-  -e DIB_REALM="DOMAIN.HOME.ARPA" \
-  -e DIB_DOMAIN="DOMAIN" \
-  -e DIB_DOMAIN_ADMIN_PASSWORD="${DIB_DOMAIN_ADMIN_PASSWORD}" \
-  -e DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART="false" \
-  -e DIB_INTERFACE="eth0" \
-  -e DIB_DHCP_POOL="192.168.1.100-192.168.1.199" \
-  -e DIB_DNS_FORWARDERS="1.1.1.1; 8.8.8.8;" \
-  -e DIB_SAMBA_METRICS_ENABLED="true" \
-  -e DIB_SAMBA_METRICS_PORT="9922" \
-  -v bind-config:/etc/bind \
-  -v bind-data:/var/cache/bind \
-  -v chrony-config:/etc/chrony \
-  -v chrony-data:/var/lib/chrony \
-  -v kea-config:/etc/kea \
-  -v kea-data:/var/lib/kea \
-  -v stork-config:/etc/stork \
-  -v stork-data: /var/lib/stork-agent \
-  -v samba-data:/var/lib/samba \
-  -v log-data:/var/log \
-  gmouzourou/domain-in-a-box:latest
-```
-
-**Explanation of key options:**
-
-- **`-d`**: Runs the container in detached mode.
-- **`--name domain-in-a-box`**: Assigns a custom name to the container.
-- **`--privileged`**: Grants the container elevated privileges for necessary low-level operations.
-- **`--network domain_net` & `--ip 192.168.1.1`**: Connects the container to the custom macvlan network and assigns it a static IP address.
-- **Environment Variables (`-e`)**: Passes configuration values such as the Kerberos realm, domain details, DHCP pool, DNS forwarders, and metrics endpoint settings.
-- **Volume Mounts (`-v`)**: Ensures persistent data storage by mounting named volumes to directories inside the container.
-
-#### 3. Verify and Manage the Deployment
-
-- **Check Container Status:**
-
-  ```bash
-  docker ps
-  ```
-
-- **Review Container Logs:**
-
-  ```bash
-  docker logs domain-in-a-box
-  ```
-
-- **Access the Container for Debugging (if needed):**
-
-  ```bash
-  docker exec -it domain-in-a-box /bin/sh
-  ```
-
-- **Stop and Remove the Container:**
-
-  To stop and remove the container, run:
-
-  ```bash
-  docker stop domain-in-a-box && docker rm domain-in-a-box
-  ```
-  
-- **Remove the Created Network (Optional):**
-
-  If you no longer need the macvlan network:
-
-  ```bash
-  docker network rm domain_net
-  ```
-
-## 5. Additional Considerations
-
-- **Persistent Data:**  
-  If you prefer to use host directories (bind mounts) instead of Docker-managed named volumes, replace the volume options with absolute paths (e.g., `/path/to/host/bind-config:/etc/bind`).
-
-- **Security Implications:**  
-  Running the container in privileged mode and assigning a static IP on your host network may introduce security risks. Ensure that your host is secure and that only trusted users have access.
-
-- **Environment-Specific Adjustments:**  
-  Customize environment variables and network settings to match your production environment. In particular, ensure that your LAN and any upstream firewall permit the standard AD/DC ports plus `123/udp` for Chrony, `9119/tcp` for BIND metrics, `9547/tcp` for Kea metrics, `9922/tcp` for Samba Prometheus metrics, and the fixed Samba RPC range `49152-49252/tcp`.
-
-### Metrics Endpoint Notes
-
-- **Samba AD DC:** `smb_prometheus_endpoint` is enabled by default and exports SMB metrics from `smbprofile.tdb` on port `9922`.
-- **BIND9:** A metrics endpoint is available on port `9119`.
-- **Kea:** A metrics endpoint is available on port `9547`.
-- **Stork UI:** When deployed with the separate Stork server, the UI is reachable on port `80`. For HTTPS access on port `443`, you'll need to provide custom TLS configuration.
+Point a client's DNS at the controller and join it to the domain. The Stork
+dashboard is at `https://192.168.1.3/`.
+
+The full walkthrough is in [Docker](docs/docker.md). For Kubernetes, see
+[Kubernetes](docs/kubernetes.md).
+
+## Documentation
+
+The [manual](docs/README.md) covers:
+
+- [Getting started](docs/getting-started.md): prerequisites and choosing a deployment
+- [Networking](docs/networking.md) and [Certificates](docs/certificates.md)
+- [Docker](docs/docker.md), [Kubernetes](docs/kubernetes.md) and
+  [Multi-controller Kubernetes](docs/multi-controller.md)
+- [Configuration reference](docs/configuration.md)
+- [Operations](docs/operations.md), [Operator procedures](docs/operator-procedures.md)
+  and [Troubleshooting](docs/troubleshooting.md)
+- [Multi-controller design notes](docs/multi-controller-design.md)
+- [Development](docs/development.md)
+
+## Project status
+
+Single-controller Docker and Kubernetes deployments are tested in CI on every
+change: service health, DNS, DHCP leases, Active Directory queries over LDAP
+and LDAPS, and an Ubuntu client domain join. Multi-controller mode has been
+tested on a three-node lab cluster but is experimental. See
+[Validation status](docs/multi-controller.md#validation-status) and the
+[open issues](https://github.com/GMouzourou/Domain-In-A-Box/issues).
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome. See
+[Development](docs/development.md) for how to build and test.
+
+## Licence
+
+Domain-In-A-Box is licensed under the
+[GNU Affero General Public License v3.0](LICENSE). It builds on
+[Samba](https://www.samba.org/), [BIND9](https://www.isc.org/bind/),
+[Kea](https://www.isc.org/kea/), [Stork](https://www.isc.org/stork/),
+[Chrony](https://chrony-project.org/) and
+[PostgreSQL](https://www.postgresql.org/), each under its own licence.

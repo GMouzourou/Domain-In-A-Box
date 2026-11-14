@@ -8,6 +8,7 @@ services:
     image: ghcr.io/gmouzourou/domain-in-a-box:latest
     hostname: domain-server
     container_name: domain-in-a-box
+    restart: unless-stopped
     privileged: true
     cap_add:
       - NET_ADMIN
@@ -27,7 +28,7 @@ services:
       DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART: "${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
       # Shared with Stork Server for LDAP authentication
       DIB_LDAP_PASSWORD: "${DIB_LDAP_PASSWORD:?Set DIB_LDAP_PASSWORD in .env}"
-      # DIB_INTERFACE: Set the network interface to be used by the domain controller
+      # DIB_INTERFACE: The controller's LAN interface inside the container (eth0 for a single macvlan network)
       DIB_INTERFACE: "${DIB_INTERFACE:-eth0}"
       # DIB_DHCP_POOL: Define the DHCP range to lease addresses from; updates are applied on restart
       DIB_DHCP_POOL: "${DIB_DHCP_POOL:-192.168.1.100-192.168.1.199}"
@@ -120,8 +121,6 @@ services:
       STORK_REST_TLS_CERTIFICATE: "/certs/cert.pem"
       STORK_REST_TLS_PRIVATE_KEY: "/certs/key.pem"
       STORK_REST_PORT: "${STORK_REST_PORT:-443}"
-    ports:
-      - "8080:443"
     volumes:
       - "${DIB_STORK_SERVER_TLS_DIR:-./certs/stork-server}:/certs:ro"
       - "${DIB_CONTROLLER_TLS_DIR:-./certs/controller}:/etc/dib-trust/ldap:ro"
@@ -134,7 +133,7 @@ networks:
   domain_net:
     driver: macvlan
     driver_opts:
-      parent: ${DIB_INTERFACE:-eth0}
+      parent: ${DIB_PARENT_INTERFACE:-eth0} # Host interface on your LAN
     ipam:
       config:
         - subnet: "192.168.1.0/24" # Adjust to match your local network subnet

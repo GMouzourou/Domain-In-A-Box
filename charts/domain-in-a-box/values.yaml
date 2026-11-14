@@ -13,10 +13,37 @@ storkImage:
 domain:
   realm: "DOMAIN.HOME.ARPA"
   name: "DOMAIN"
+  controllerMode: primary
+  joinServer: ""
   interface: "net1"
+  dhcpEnabled: true
   dhcpPool: "192.168.1.100-192.168.1.199"
   dnsForwarders: "1.1.1.1; 8.8.8.8;"
   syncPasswordOnRestart: false
+
+dhcpHA:
+  # Enable only when configuring the fixed primary/standby pair.
+  enabled: false
+  primaryAddress: ""
+  standbyAddress: ""
+  primaryName: "dib-primary"
+  standbyName: "dib-secondary"
+
+sysvolSync:
+  # Enable only when configuring the fixed writer/standby pair.
+  enabled: false
+  # Secret contents depend on controllerMode:
+  # primary: ssh_host_ed25519_key and id_ed25519.pub
+  # secondary: id_ed25519 and known_hosts
+  secretName: ""
+  hostKeyKey: "ssh_host_ed25519_key"
+  clientPrivateKeyKey: "id_ed25519"
+  clientPublicKeyKey: "id_ed25519.pub"
+  knownHostsKey: "known_hosts"
+  peerAddress: ""
+  writerAddress: ""
+  sshPort: 22
+  intervalSeconds: 60
 
 credentials:
   # Create this Kubernetes Secret before installing the chart.
@@ -30,6 +57,9 @@ metrics:
   port: 9922
 
 storkServer:
+  enabled: true
+  # Set this to the singleton Stork server for a secondary controller.
+  host: ""
   resources:
     requests:
       cpu: "100m"

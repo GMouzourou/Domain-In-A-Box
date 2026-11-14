@@ -16,6 +16,67 @@ func TestBootstrapSkipsStorkWhenNoServerIsConfigured(t *testing.T) {
 	}
 }
 
+func TestBootstrapLDAPSearchUserByControllerMode(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		controllerMode string
+		wantCalls      []string
+	}{
+		{
+			name:           "primary creates and configures the shared account",
+			controllerMode: "primary",
+			wantCalls: []string{
+				"user create ldap-search-user --description=Read-only LDAP Bind User test-password",
+				"user setexpiry ldap-search-user --noexpiry",
+			},
+		},
+		{
+			name:           "secondary reuses the replicated shared account",
+			controllerMode: "secondary",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			stateDir := filepath.Join(t.TempDir(), "samba")
+			if err := os.Mkdir(stateDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			callsPath := filepath.Join(t.TempDir(), "samba-tool-calls")
+			t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("DIB_TEST_SAMBA_TOOL_CALLS", callsPath)
+			stub := `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$DIB_TEST_SAMBA_TOOL_CALLS"
+`
+			if err := os.WriteFile(filepath.Join(binDir, "samba-tool"), []byte(stub), 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := bootstrapLDAPSearchUser(context.Background(), stateDir, tc.controllerMode, "test-password"); err != nil {
+				t.Fatalf("bootstrapLDAPSearchUser() error = %v", err)
+			}
+
+			gotCalls := []string(nil)
+			if contents, err := os.ReadFile(callsPath); err == nil {
+				gotCalls = strings.Split(strings.TrimSpace(string(contents)), "\n")
+			} else if !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			if len(gotCalls) == 1 && gotCalls[0] == "" {
+				gotCalls = nil
+			}
+			if len(gotCalls) != len(tc.wantCalls) {
+				t.Fatalf("samba-tool calls = %q, want %q", gotCalls, tc.wantCalls)
+			}
+			for i := range gotCalls {
+				if gotCalls[i] != tc.wantCalls[i] {
+					t.Fatalf("samba-tool calls = %q, want %q", gotCalls, tc.wantCalls)
+				}
+			}
+		})
+	}
+}
+
 func TestStorkTLSSettingsRequireTLSOrExplicitInsecureOptIn(t *testing.T) {
 	t.Setenv("STORK_REST_TLS_CERTIFICATE", filepath.Join(t.TempDir(), "missing.crt"))
 	t.Setenv("STORK_REST_TLS_PRIVATE_KEY", filepath.Join(t.TempDir(), "missing.key"))

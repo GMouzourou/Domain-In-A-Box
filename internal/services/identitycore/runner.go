@@ -30,11 +30,16 @@ func (r *Runner) Name() string { return "identity-core" }
 func (r *Runner) Configure(ctx context.Context) error {
 	if os.Getenv("INIT_DOMAIN") == "TRUE" {
 		if _, err := os.Stat("/etc/samba/smb.conf"); os.IsNotExist(err) {
-			if err := provision(ctx); err != nil {
+			if err := configureController(ctx); err != nil {
 				return err
 			}
 		} else if err != nil {
 			return fmt.Errorf("check Samba configuration: %w", err)
+		}
+	}
+	if os.Getenv("DIB_CONTROLLER_MODE") == "secondary" {
+		if err := enforceSecondarySYSVOLReadOnly(ctx); err != nil {
+			return err
 		}
 	}
 	if err := configureKerberos(ctx); err != nil {
@@ -54,6 +59,31 @@ func (r *Runner) Configure(ctx context.Context) error {
 		return updateSambaMetrics("/etc/samba/smb.conf", os.Getenv("DIB_SAMBA_METRICS_ENABLED"))
 	}
 	return nil
+}
+
+func configureController(ctx context.Context) error {
+	mode, err := controllerMode()
+	if err != nil {
+		return err
+	}
+	switch mode {
+	case "", "primary":
+		return provision(ctx)
+	case "secondary":
+		return joinSecondary(ctx)
+	}
+	return nil
+}
+
+func controllerMode() (string, error) {
+	switch mode := os.Getenv("DIB_CONTROLLER_MODE"); mode {
+	case "", "primary":
+		return "primary", nil
+	case "secondary":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("DIB_CONTROLLER_MODE must be primary or secondary, got %q", mode)
+	}
 }
 
 func (r *Runner) Bootstrap(ctx context.Context) error {
@@ -79,6 +109,13 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 	password, err := environment("DIB_DOMAIN_ADMIN_PASSWORD")
 	if err != nil {
 		return err
+	}
+	mode, err := controllerMode()
+	if err != nil {
+		return err
+	}
+	if mode == "secondary" {
+		return bootstrapSecondary(ctx, reverseZone, hostname, address, password)
 	}
 	parts := strings.Split(address, ".")
 	if len(parts) != 4 {
