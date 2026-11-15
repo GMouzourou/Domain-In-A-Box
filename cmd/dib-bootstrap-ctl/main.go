@@ -7,9 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"syscall"
 	"time"
 
 	platformlog "github.com/GMouzourou/domain-in-a-box/internal/platform/log"
+	"github.com/GMouzourou/domain-in-a-box/internal/platform/supervisor"
 	"github.com/GMouzourou/domain-in-a-box/internal/platform/wait"
 )
 
@@ -27,13 +29,34 @@ func main() {
 		err = run(context.Background())
 	case len(os.Args) == 2 && os.Args[1] == "stork":
 		err = runStork(context.Background())
+	case len(os.Args) == 2 && os.Args[1] == "watchdog":
+		err = runWatchdog()
+	case len(os.Args) >= 2 && os.Args[1] == "start":
+		err = start(os.Args[2:])
 	default:
-		err = fmt.Errorf("usage: dib-bootstrap-ctl [stork]")
+		err = fmt.Errorf("usage: dib-bootstrap-ctl [start [command...]|stork|watchdog]")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// runWatchdog is a supervisord event listener. Stdout carries the listener
+// protocol, so diagnostics go to stderr.
+func runWatchdog() error {
+	logger := platformlog.New("watchdog").WithWriter(os.Stderr)
+	stopping := false
+	return supervisor.Listen(os.Stdin, os.Stdout, &supervisor.Watchdog{Now: time.Now}, func(reason string) {
+		if stopping {
+			return
+		}
+		stopping = true
+		logger.Errorf("%s; stopping the controller so the container runtime restarts it", reason)
+		if err := syscall.Kill(os.Getppid(), syscall.SIGTERM); err != nil {
+			logger.Errorf("signal supervisord: %v", err)
+		}
+	})
 }
 
 func run(ctx context.Context) error {
@@ -147,11 +170,11 @@ func retryStork(ctx context.Context, delay time.Duration, attempt func(context.C
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := attempt(ctx); err == nil {
+		err := attempt(ctx)
+		if err == nil {
 			return nil
-		} else {
-			report(err)
 		}
+		report(err)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():

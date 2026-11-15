@@ -149,7 +149,7 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 			return err
 		}
 	}
-	return registerStorkAgent(ctx, "/var/lib/stork-agent", agentHost, "--server-url="+serverURL, "--server-token="+serverToken, "--agent-host="+agentHost, "--agent-port=8081", "--non-interactive")
+	return registerStorkAgent(ctx, "/var/lib/stork-agent", agentHost, serverToken, "--server-url="+serverURL, "--agent-host="+agentHost, "--agent-port=8081", "--non-interactive")
 }
 
 func bootstrapLDAPSearchUser(ctx context.Context, stateDir, controllerMode, password string) error {
@@ -158,7 +158,7 @@ func bootstrapLDAPSearchUser(ctx context.Context, stateDir, controllerMode, pass
 	}
 
 	if err := bootstrap.RunOnce(ctx, filepath.Join(stateDir, ".dib-ldap-search-user-created"), func(ctx context.Context) error {
-		return run(ctx, "samba-tool", "user", "create", "ldap-search-user", "--description=Read-only LDAP Bind User", password)
+		return runCommand(ctx, password+"\n"+password+"\n", nil, "samba-tool", "user", "create", "ldap-search-user", "--description=Read-only LDAP Bind User")
 	}); err != nil {
 		return err
 	}
@@ -167,8 +167,9 @@ func bootstrapLDAPSearchUser(ctx context.Context, stateDir, controllerMode, pass
 	})
 }
 
-func registerStorkAgent(ctx context.Context, stateDir, advertisedHost string, args ...string) error {
-	if err := run(ctx, "stork-agent", append([]string{"register"}, args...)...); err != nil {
+// The server token is passed through the environment so that it is not visible in the process table.
+func registerStorkAgent(ctx context.Context, stateDir, advertisedHost, serverToken string, args ...string) error {
+	if err := runCommand(ctx, "", []string{"STORK_AGENT_SERVER_TOKEN=" + serverToken}, "stork-agent", append([]string{"register"}, args...)...); err != nil {
 		return err
 	}
 	// Registration runs as root, but the agent reads its credentials as stork-agent.
@@ -288,37 +289,23 @@ func waitForFile(ctx context.Context, path string) error {
 }
 
 func run(ctx context.Context, name string, args ...string) error {
+	return runCommand(ctx, "", nil, name, args...)
+}
+
+func runCommand(ctx context.Context, input string, environment []string, name string, args ...string) error {
 	command := exec.CommandContext(ctx, name, args...)
+	if input != "" {
+		command.Stdin = strings.NewReader(input)
+	}
+	if len(environment) > 0 {
+		command.Env = append(os.Environ(), environment...)
+	}
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("run %s: %w", name, err)
 	}
 	return nil
-}
-
-func postgres(ctx context.Context, query, create string) error {
-	value, err := postgresValue(ctx, query, "postgres")
-	if err != nil {
-		return err
-	}
-	if value == "1" {
-		return nil
-	}
-	return run(ctx, "su", "-s", "/bin/sh", "-c", "psql -v ON_ERROR_STOP=1 -c \""+create+"\"", "postgres")
-}
-
-func postgresValue(ctx context.Context, query, database string) (string, error) {
-	command := exec.CommandContext(ctx, "su", "-s", "/bin/sh", "-c", "psql -tAc \""+query+"\" -d \""+database+"\"", "postgres")
-	output, err := command.Output()
-	if err != nil {
-		return "", fmt.Errorf("query PostgreSQL: %w", err)
-	}
-	return strings.TrimSpace(string(output)), nil
-}
-
-func storkDatabasePassword() (string, error) {
-	return storkEnvironment("STORK_DATABASE_PASSWORD")
 }
 
 func storkEnvironment(key string) (string, error) {

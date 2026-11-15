@@ -71,73 +71,6 @@ func TestUpdateBindForwardersPreservesOtherConfiguration(t *testing.T) {
 	}
 }
 
-func TestEnsureCronEntryPreservesJobsAndAvoidsDuplicates(t *testing.T) {
-	dir := t.TempDir()
-	state := filepath.Join(dir, "crontab.txt")
-	command := filepath.Join(dir, "crontab")
-	script := `#!/bin/sh
-if [ "$3" = "-l" ]; then
-    [ -f "$DIB_TEST_CRONTAB" ] || exit 1
-    cat "$DIB_TEST_CRONTAB"
-    exit 0
-fi
-if [ "$3" = "-" ]; then
-    cat > "$DIB_TEST_CRONTAB"
-    exit 0
-fi
-exit 2
-`
-	if err := os.WriteFile(command, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("DIB_TEST_CRONTAB", state)
-	line := "0 */4 * * * /usr/bin/kinit -kt /var/lib/kea/keaddns.keytab keaddns@DOMAIN.HOME.ARPA"
-	if err := os.WriteFile(state, []byte("15 * * * * /usr/bin/other-job\n"+line+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	for range 2 {
-		if err := ensureCronEntry(context.Background(), "_kea", line); err != nil {
-			t.Fatalf("ensureCronEntry() error = %v", err)
-		}
-	}
-
-	contents, err := os.ReadFile(state)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Count(string(contents), line); got != 1 {
-		t.Fatalf("renewal job count = %d, want 1; crontab:\n%s", got, contents)
-	}
-	if !strings.Contains(string(contents), "/usr/bin/other-job") {
-		t.Fatalf("unrelated crontab entry was removed: %s", contents)
-	}
-}
-
-func TestKinitKeaDDNSUsesControllerPrincipal(t *testing.T) {
-	dir := t.TempDir()
-	result := filepath.Join(dir, "kinit-args")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$KRB5CCNAME\" \"$@\" > \"$DIB_TEST_KINIT_ARGS\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "kinit"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("DIB_TEST_KINIT_ARGS", result)
-
-	if err := kinitKeaDDNS(context.Background(), "dib-0", "DOMAIN.HOME.ARPA"); err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "FILE:/run/kea/keaddns.ccache\n-kt\n/var/lib/kea/keaddns.keytab\nkea-dib-0@DOMAIN.HOME.ARPA\n"
-	if string(got) != want {
-		t.Fatalf("kinit invocation = %q, want %q", got, want)
-	}
-}
-
 func TestDHCPEnabledDefaultsToTrueAndParsesConfiguredValue(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -170,7 +103,7 @@ func TestRunDoesNotStartKeaWhenDHCPIsDisabled(t *testing.T) {
 	t.Setenv("DIB_DHCP_HA_ENABLED", "false")
 	runner := NewRunner()
 
-	for _, component := range []string{"kea-dhcp4", "kea-dhcp-ddns"} {
+	for _, component := range []string{"kea-dhcp4", "dhcp-ddns"} {
 		t.Run(component, func(t *testing.T) {
 			t.Setenv("DIB_NETWORK_COMPONENT", component)
 			if err := runner.Run(context.Background()); err != nil {
@@ -305,42 +238,145 @@ func TestValidateKeaDHCPHAConfigurationRequiresManualFailoverPeers(t *testing.T)
 	}
 }
 
-func TestReconcileKeaDDNSPrincipalPreservesCustomConfiguration(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "kea-dhcp-ddns.conf")
-	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
-		t.Fatal(err)
+func haTestSettings(mode string) dhcpHASettings {
+	return dhcpHASettings{
+		enabled:        true,
+		controllerMode: mode,
+		primaryAddress: "192.0.2.10",
+		standbyAddress: "192.0.2.11",
+		primaryName:    "primary",
+		standbyName:    "standby",
 	}
-	configuration := map[string]any{
-		"DhcpDdns": map[string]any{
-			"custom-option": "preserve-me",
-			"hooks-libraries": []map[string]any{{
-				"library": "libddns_gss_tsig.so",
-				"parameters": map[string]any{
-					"client-principal": "keaddns@EXAMPLE.TEST",
-					"custom-parameter": "preserve-me",
-				},
-			}},
-		},
-	}
-	if err := writeJSONAtomically(path, configuration); err != nil {
-		t.Fatal(err)
-	}
-	if err := reconcileKeaDDNSPrincipal(path, "dib-secondary-0", "example.test", "EXAMPLE.TEST"); err != nil {
-		t.Fatalf("reconcileKeaDDNSPrincipal() error = %v", err)
-	}
+}
+
+func readKeaTestConfiguration(t *testing.T, path string) map[string]any {
+	t.Helper()
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var updated map[string]any
-	if err := json.Unmarshal(contents, &updated); err != nil {
+	var configuration map[string]any
+	if err := json.Unmarshal(contents, &configuration); err != nil {
 		t.Fatal(err)
 	}
-	ddns := updated["DhcpDdns"].(map[string]any)
-	hook := ddns["hooks-libraries"].([]any)[0].(map[string]any)
-	parameters := hook["parameters"].(map[string]any)
-	if parameters["client-principal"] != "kea-dib-secondary-0@EXAMPLE.TEST" || parameters["custom-parameter"] != "preserve-me" || ddns["custom-option"] != "preserve-me" {
-		t.Fatalf("DDNS configuration was not reconciled while preserving custom fields: %#v", updated)
+	return configuration["Dhcp4"].(map[string]any)
+}
+
+func TestReconcileKeaDHCP4ConfigurationUpgradesPersistedSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kea-dhcp4.conf")
+	legacy := `{"Dhcp4": {
+		"custom-option": "keep",
+		"dhcp-ddns": {"enable-updates": true},
+		"option-data": [
+			{"name": "domain-name-servers", "code": 6, "data": "192.0.2.10"},
+			{"name": "ntp-servers", "code": 42, "data": "192.0.2.1"}
+		],
+		"subnet4": [{"id": 1, "subnet": "192.0.2.0/24", "pools": [{"pool": "192.0.2.100-192.0.2.199", "client-classes": ["HA_primary"]}]}],
+		"hooks-libraries": [
+			{"library": "libdhcp_lease_cmds.so"},
+			{"library": "libdhcp_ha.so", "parameters": {"high-availability": [{"this-server-name": "primary", "peers": [
+				{"name": "primary", "url": "https://192.0.2.10:8005/", "role": "primary"},
+				{"name": "standby", "url": "https://192.0.2.99:8005/", "role": "standby"}
+			]}]}}
+		]
+	}}`
+	if err := os.WriteFile(path, []byte(legacy), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	settings := haTestSettings("primary")
+	desired := buildKeaDHCP4Configuration("net1", "192.0.2.10", "192.0.2.254", "example.test", "192.0.2.0/24", "192.0.2.100-192.0.2.199", settings)
+	setKeaDNSServers(desired, []string{"192.0.2.10", "192.0.2.11"})
+
+	changed, err := reconcileKeaDHCP4Configuration(path, desired, settings)
+	if err != nil || !changed {
+		t.Fatalf("reconcileKeaDHCP4Configuration() = %v, %v; want changed", changed, err)
+	}
+	if err := validateKeaDHCPHAConfiguration(path, settings); err != nil {
+		t.Fatalf("reconciled configuration failed HA validation: %v", err)
+	}
+	dhcp4 := readKeaTestConfiguration(t, path)
+	if dhcp4["custom-option"] != "keep" || dhcp4["ddns-qualifying-suffix"] != "example.test." || dhcp4["ddns-update-on-renew"] != true {
+		t.Fatalf("managed DDNS globals or operator settings wrong: %#v", dhcp4)
+	}
+	if ddns := dhcp4["dhcp-ddns"].(map[string]any); ddns["server-port"] != float64(53001) || ddns["ncr-protocol"] != "UDP" {
+		t.Fatalf("dhcp-ddns = %#v", ddns)
+	}
+	options := dhcp4["option-data"].([]any)
+	if len(options) != 2 || options[0].(map[string]any)["data"] != "192.0.2.10, 192.0.2.11" || options[1].(map[string]any)["name"] != "ntp-servers" {
+		t.Fatalf("option-data = %#v", options)
+	}
+	if previous, err := os.ReadFile(path + ".dib-previous"); err != nil || string(previous) != legacy {
+		t.Fatalf("previous configuration not preserved: %v", err)
+	}
+
+	if changed, err := reconcileKeaDHCP4Configuration(path, desired, settings); err != nil || changed {
+		t.Fatalf("second reconciliation = %v, %v; want unchanged", changed, err)
+	}
+}
+
+func TestReconcileKeaDHCP4ConfigurationRefusesRoleSwap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kea-dhcp4.conf")
+	primary := haTestSettings("primary")
+	configuration := buildKeaDHCP4Configuration("net1", "192.0.2.10", "192.0.2.254", "example.test", "192.0.2.0/24", "192.0.2.100-192.0.2.199", primary)
+	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONAtomically(path, configuration); err != nil {
+		t.Fatal(err)
+	}
+	secondary := haTestSettings("secondary")
+	desired := buildKeaDHCP4Configuration("net1", "192.0.2.11", "192.0.2.254", "example.test", "192.0.2.0/24", "192.0.2.100-192.0.2.199", secondary)
+	if _, err := reconcileKeaDHCP4Configuration(path, desired, secondary); err == nil || !strings.Contains(err.Error(), "opposite role") {
+		t.Fatalf("reconcileKeaDHCP4Configuration() error = %v, want role-swap refusal", err)
+	}
+}
+
+func TestDHCPDNSServersListsBothHAPeersLocalFirst(t *testing.T) {
+	got, err := dhcpDNSServers("192.0.2.11", haTestSettings("secondary"))
+	if err != nil || strings.Join(got, ",") != "192.0.2.11,192.0.2.10" {
+		t.Fatalf("dhcpDNSServers() = %v, %v", got, err)
+	}
+	t.Setenv("DIB_DHCP_DNS_SERVERS", "192.0.2.53, 192.0.2.54")
+	got, err = dhcpDNSServers("192.0.2.11", haTestSettings("secondary"))
+	if err != nil || strings.Join(got, ",") != "192.0.2.53,192.0.2.54" {
+		t.Fatalf("dhcpDNSServers() override = %v, %v", got, err)
+	}
+	t.Setenv("DIB_DHCP_DNS_SERVERS", "dns.example.test")
+	if _, err := dhcpDNSServers("192.0.2.11", haTestSettings("secondary")); err == nil {
+		t.Fatal("dhcpDNSServers() accepted a non-IPv4 server")
+	}
+}
+
+func TestRepairKeaLogPermissionsRestoresTraversableDirectory(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "kea")
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(directory, "kea-dhcp4.log")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "shadow")
+	if err := os.WriteFile(outside, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(directory, "link.log")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if err := repairKeaLogPermissions(directory); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{directory: 0o775 | os.ModeSetgid | os.ModeDir, file: 0o664, outside: 0o600} {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode() != want {
+			t.Fatalf("%s mode = %v, want %v (%v)", path, info.Mode(), want, err)
+		}
+	}
+	if err := repairKeaLogPermissions(filepath.Join(t.TempDir(), "missing")); err != nil {
+		t.Fatalf("missing directory: %v", err)
 	}
 }
 
@@ -356,7 +392,7 @@ func TestDHCPHATakeoverRequiresPartnerDownAndAllowsOnlyStandby(t *testing.T) {
 		return keaControlResponse{Result: 0, Arguments: DHCPHAStatus{State: "hot-standby"}}
 	})
 
-	err := NewRunner().DHCPHATakeover(context.Background(), true, false)
+	err := NewRunner().DHCPHATakeover(context.Background(), true)
 	if err == nil || !strings.Contains(err.Error(), "not partner-down") {
 		t.Fatalf("DHCPHATakeover() error = %v, want partner-down refusal", err)
 	}
@@ -374,7 +410,7 @@ func TestDHCPHATakeoverRefusesWhenPrimaryPeerIsAlreadyEnabled(t *testing.T) {
 		return keaControlResponse{Result: 0, Arguments: DHCPHAStatus{State: "partner-down", Scopes: []string{"dib-primary"}}}
 	})
 
-	err := NewRunner().DHCPHATakeover(context.Background(), true, false)
+	err := NewRunner().DHCPHATakeover(context.Background(), true)
 	if err == nil || !strings.Contains(err.Error(), "already reports") {
 		t.Fatalf("DHCPHATakeover() error = %v, want refusal for already-enabled primary peer", err)
 	}
@@ -394,7 +430,7 @@ func TestDHCPHATakeoverEnablesPrimaryScopeOnlyAfterExplicitConfirmation(t *testi
 		return keaControlResponse{Result: 0, Text: "HA scopes set"}
 	})
 
-	if err := NewRunner().DHCPHATakeover(context.Background(), true, false); err != nil {
+	if err := NewRunner().DHCPHATakeover(context.Background(), true); err != nil {
 		t.Fatalf("DHCPHATakeover() error = %v", err)
 	}
 	heartbeat := <-requests
@@ -407,18 +443,20 @@ func TestDHCPHATakeoverEnablesPrimaryScopeOnlyAfterExplicitConfirmation(t *testi
 	}
 }
 
-func TestDHCPHATakeoverRequiresExplicitLeaseDivergenceAcceptance(t *testing.T) {
+func TestDHCPHATakeoverIgnoresCumulativeUnsentUpdateCount(t *testing.T) {
 	t.Setenv("DIB_DHCP_HA_ENABLED", "true")
 	t.Setenv("DIB_CONTROLLER_MODE", "secondary")
 	socketPath := filepath.Join(t.TempDir(), "kea.sock")
 	t.Setenv("DIB_KEA_CONTROL_SOCKET", socketPath)
 	startControlSocket(t, socketPath, func(request keaControlRequest) keaControlResponse {
-		return keaControlResponse{Result: 0, Arguments: DHCPHAStatus{State: "partner-down", UnsentUpdateCount: 3}}
+		if request.Command == "ha-heartbeat" {
+			return keaControlResponse{Result: 0, Arguments: DHCPHAStatus{State: "partner-down", UnsentUpdateCount: 1}}
+		}
+		return keaControlResponse{Result: 0, Text: "HA scopes set"}
 	})
 
-	err := NewRunner().DHCPHATakeover(context.Background(), true, false)
-	if err == nil || !strings.Contains(err.Error(), "--accept-unsent-updates") {
-		t.Fatalf("DHCPHATakeover() error = %v, want unsent-update warning", err)
+	if err := NewRunner().DHCPHATakeover(context.Background(), true); err != nil {
+		t.Fatalf("DHCPHATakeover() error = %v; a counter left by an earlier takeover must not block a later one", err)
 	}
 }
 

@@ -108,14 +108,19 @@ The pinned Kea 3.0.3 packages include the HA and lease-commands hooks. Per the
   `partner-down`, so the operator must confirm the primary is off.
 - Manual takeover uses Kea's `ha-scopes` command, wrapped by
   `dib-network-core-ctl dhcp-ha takeover` and `resume`. The wrapper requires
-  explicit confirmation and a local `partner-down` state, and refuses when
-  lease updates are unsent unless overridden. `ha-scopes` takes the peer name
+  explicit confirmation and a local `partner-down` state. It does not gate on
+  Kea's `unsent-update-count`, which is cumulative and describes the standby's
+  own unsent updates rather than the primary's
+  ([#51](https://github.com/GMouzourou/Domain-In-A-Box/issues/51)). `ha-scopes` takes the peer name
   (for example `dib-primary`), not the `HA_<name>` client class.
 - Peers communicate over Kea's dedicated HTTPS listener on port `8005`, with
   mutual TLS using the controller certificates. Each certificate must include
   the controller's LAN IP address.
 - Each controller has its own GSS-TSIG account (`kea-<hostname>`) and keytab
-  for DDNS.
+  for DDNS. The accounts are members of `DnsAdmins`, so after a takeover the
+  secondary can renew and remove records the primary registered. Ownership is
+  tracked by a TXT marker carrying the client's DHCID, not by the account
+  that created the record.
 
 ## Secondary join
 

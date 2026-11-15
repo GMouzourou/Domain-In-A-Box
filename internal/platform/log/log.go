@@ -21,9 +21,9 @@ func New(prefix string) *Logger {
 }
 
 func (l *Logger) WithWriter(w io.Writer) *Logger {
-	copy := *l
-	copy.base = stdlog.New(w, "", stdlog.LstdFlags)
-	return &copy
+	clone := *l
+	clone.base = stdlog.New(w, "", stdlog.LstdFlags)
+	return &clone
 }
 
 func (l *Logger) Infof(format string, args ...any) {

@@ -4,7 +4,7 @@ apiVersion: k8s.cni.cncf.io/v1
 kind: NetworkAttachmentDefinition
 metadata:
   name: dib-macvlan-server
-# The 192.168.3.254/32 route exists only so entrypoint.sh can detect a gateway.
+# The 192.168.3.254/32 route exists only so controller start-up can detect a gateway.
 # The pod default route must stay on eth0, or ClusterIP traffic would bypass
 # kube-proxy on the node.
 spec:

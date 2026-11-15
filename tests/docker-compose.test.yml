@@ -8,13 +8,32 @@ services:
     image: domain-in-a-box:ci
     hostname: domain-controller
     container_name: domain-in-a-box-test-server
-    privileged: true
+    privileged: false
+    cap_drop:
+      - ALL
     cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - DAC_READ_SEARCH
+      - FOWNER
+      - FSETID
+      - SETGID
+      - SETUID
+      - SETPCAP
+      - NET_BIND_SERVICE
       - NET_ADMIN
       - NET_RAW
+      - SYS_CHROOT
+      - SYS_PTRACE
+      - SYS_ADMIN
+      - SETFCAP
+      - KILL
     networks:
       domain_net:
         ipv4_address: 192.168.2.1
+        interface_name: eth0
+      stork_database_net:
+        interface_name: eth1
     ports:
       # DNS (using different ports to avoid host conflicts)
       - "5353:53"
@@ -49,7 +68,9 @@ services:
       DIB_SAMBA_METRICS_ENABLED: "true"
       DIB_SAMBA_METRICS_PORT: "9922"
       DIB_LDAP_PASSWORD: "StorkLDAPTestPassword123!"
-      STORK_DATABASE_HOST: "192.168.2.3"
+      # The controller resolves names through its own DNS, so it reaches the
+      # bundled database by address.
+      STORK_DATABASE_HOST: "172.31.255.2"
       STORK_DATABASE_PORT: "5432"
       STORK_DATABASE_NAME: "stork"
       STORK_DATABASE_USER_NAME: "stork"
@@ -91,8 +112,8 @@ services:
       POSTGRES_USER: "stork"
       POSTGRES_PASSWORD: "StorkPostgresTestPassword123!"
     networks:
-      domain_net:
-        ipv4_address: 192.168.2.3
+      stork_database_net:
+        ipv4_address: "172.31.255.2"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U stork -d stork"]
       interval: 5s
@@ -129,6 +150,8 @@ services:
     networks:
       domain_net:
         ipv4_address: 192.168.2.4
+        priority: 100
+      stork_database_net:
     depends_on:
       postgres:
         condition: service_healthy
@@ -179,6 +202,15 @@ networks:
       config:
         - subnet: "192.168.2.0/24"
           gateway: "192.168.2.254"
+  stork_database_net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        # Private to the host; change it only if it overlaps a network the
+        # controller must reach, and update the PostgreSQL address to match.
+        - subnet: "172.31.255.0/29"
+          ip_range: "172.31.255.4/30"
 
 volumes:
   bind-config:

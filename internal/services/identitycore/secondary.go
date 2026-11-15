@@ -94,16 +94,16 @@ func joinSecondary(ctx context.Context) error {
 }
 
 func bootstrapSecondary(ctx context.Context, reverseZone, hostname, address, password string) error {
-	if net.ParseIP(address).To4() == nil {
-		return fmt.Errorf("IP must be an IPv4 address, got %q", address)
+	recordName, err := reverseRecordName(address, reverseZone)
+	if err != nil {
+		return err
 	}
 	dnsDomain, err := environment("DNS_DOMAIN")
 	if err != nil {
 		return err
 	}
-	parts := strings.Split(address, ".")
 	return bootstrap.RunOnce(ctx, "/var/lib/samba/.dib-reverse-ptr-created", func(ctx context.Context) error {
-		return runWithInput(ctx, password+"\n", "samba-tool", "dns", "add", "127.0.0.1", reverseZone, parts[3], "PTR", hostname+"."+dnsDomain, "-U", "Administrator")
+		return runWithInput(ctx, password+"\n", "samba-tool", "dns", "add", "127.0.0.1", reverseZone, recordName, "PTR", hostname+"."+dnsDomain, "-U", "Administrator")
 	})
 }
 

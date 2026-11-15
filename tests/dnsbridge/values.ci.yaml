@@ -1,0 +1,15 @@
+realm: BRIDGE.TEST.ARPA
+username: dib-edns
+ownerID: ci-bridge
+controllers:
+  - hostname: dc1.bridge.test.arpa
+    address: 198.18.80.8
+  - hostname: dc2.bridge.test.arpa
+    address: 198.18.80.9
+allowedNetworks:
+  - 198.18.80.0/24
+  - fd12:8036::/64
+credentials:
+  existingSecret: ci-dns-credentials
+trust:
+  existingSecret: ci-dns-trust

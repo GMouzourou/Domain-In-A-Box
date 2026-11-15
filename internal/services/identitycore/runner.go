@@ -51,7 +51,7 @@ func (r *Runner) Configure(ctx context.Context) error {
 	if os.Getenv("INIT_DOMAIN") == "FALSE" {
 		if os.Getenv("DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART") == "true" {
 			if password := os.Getenv("DIB_DOMAIN_ADMIN_PASSWORD"); password != "" {
-				if err := run(ctx, "samba-tool", "user", "setpassword", "Administrator", "--newpassword="+password); err != nil {
+				if err := setAdministratorPassword(ctx, password); err != nil {
 					return err
 				}
 			}
@@ -117,23 +117,22 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 	if mode == "secondary" {
 		return bootstrapSecondary(ctx, reverseZone, hostname, address, password)
 	}
-	parts := strings.Split(address, ".")
-	if len(parts) != 4 {
-		return fmt.Errorf("IP must be an IPv4 address, got %q", address)
+	recordName, err := reverseRecordName(address, reverseZone)
+	if err != nil {
+		return err
 	}
-	credentials := "Administrator%" + password
 	if err := bootstrap.RunOnce(ctx, "/var/lib/samba/.dib-domain-level-raised", func(ctx context.Context) error {
 		return run(ctx, "samba-tool", "domain", "level", "raise", "--domain-level=2016", "--forest-level=2016")
 	}); err != nil {
 		return err
 	}
 	if err := bootstrap.RunOnce(ctx, "/var/lib/samba/.dib-reverse-zone-created", func(ctx context.Context) error {
-		return run(ctx, "samba-tool", "dns", "zonecreate", "127.0.0.1", reverseZone, "-U", credentials)
+		return runWithInput(ctx, password+"\n", "samba-tool", "dns", "zonecreate", "127.0.0.1", reverseZone, "-U", "Administrator")
 	}); err != nil {
 		return err
 	}
 	if err := bootstrap.RunOnce(ctx, "/var/lib/samba/.dib-reverse-ptr-created", func(ctx context.Context) error {
-		return run(ctx, "samba-tool", "dns", "add", "127.0.0.1", reverseZone, parts[3], "PTR", hostname+"."+dnsDomain, "-U", credentials)
+		return runWithInput(ctx, password+"\n", "samba-tool", "dns", "add", "127.0.0.1", reverseZone, recordName, "PTR", hostname+"."+dnsDomain, "-U", "Administrator")
 	}); err != nil {
 		return err
 	}
@@ -145,7 +144,7 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 		return fmt.Errorf("read Samba NetBIOS name: %w", err)
 	}
 	return bootstrap.RunOnce(ctx, "/var/lib/samba/.dib-host-cname-created", func(ctx context.Context) error {
-		return run(ctx, "samba-tool", "dns", "add", "127.0.0.1", dnsDomain, hostname, "CNAME", strings.TrimSpace(string(netbiosName))+"."+dnsDomain, "-U", credentials)
+		return runWithInput(ctx, password+"\n", "samba-tool", "dns", "add", "127.0.0.1", dnsDomain, hostname, "CNAME", strings.TrimSpace(string(netbiosName))+"."+dnsDomain, "-U", "Administrator")
 	})
 }
 
@@ -219,7 +218,64 @@ func provision(ctx context.Context) error {
 	if metrics == "" {
 		metrics = "off"
 	}
-	return run(ctx, "samba-tool", "domain", "provision", "--realm="+realm, "--domain="+domain, "--server-role=dc", "--use-rfc2307", "--dns-backend=SAMBA_INTERNAL", "--adminpass="+password, "--host-name="+hostname, "--host-ip="+ip, "--option=bind interfaces only = yes", "--option=interfaces = lo "+interfaceName, "--option=dns forwarder = "+ip+":5353", "--option=rpc server dynamic port range = 49152-49252", "--option=ntp signd socket directory = /var/lib/samba/ntp_signd", "--option=ad dc functional level = 2016", "--option=log file = /var/log/samba/%m.log", "--option=max log size = 10000", "--option=smbd profiling level = "+metrics)
+	// samba-tool accepts the initial password only as an argument, which exposes it
+	// through the process table. Provision with a random password instead (with
+	// its log line redacted), then set the real password through stdin.
+	if err := runRedacted(ctx, provisionArguments(realm, domain, hostname, ip, interfaceName, metrics)...); err != nil {
+		return err
+	}
+	return setAdministratorPassword(ctx, password)
+}
+
+func provisionArguments(realm, domain, hostname, ip, interfaceName, metrics string) []string {
+	return []string{
+		"domain", "provision",
+		"--realm=" + realm,
+		"--domain=" + domain,
+		"--server-role=dc",
+		"--use-rfc2307",
+		"--dns-backend=SAMBA_INTERNAL",
+		"--host-name=" + hostname,
+		"--host-ip=" + ip,
+		"--option=bind interfaces only = yes",
+		"--option=interfaces = lo " + interfaceName,
+		"--option=dns forwarder = " + ip + ":5353",
+		"--option=rpc server dynamic port range = 49152-49252",
+		"--option=ntp signd socket directory = /var/lib/samba/ntp_signd",
+		"--option=ad dc functional level = 2016",
+		"--option=log file = /var/log/samba/%m.log",
+		"--option=max log size = 10000",
+		"--option=smbd profiling level = " + metrics,
+	}
+}
+
+func setAdministratorPassword(ctx context.Context, password string) error {
+	return runWithInput(ctx, password+"\n"+password+"\n", "samba-tool", "user", "setpassword", "Administrator")
+}
+
+var generatedPasswordLine = regexp.MustCompile(`(?i)admin(istrator)? password:`)
+
+func runRedacted(ctx context.Context, args ...string) error {
+	output, err := exec.CommandContext(ctx, "samba-tool", args...).CombinedOutput()
+	os.Stdout.Write(redactGeneratedPassword(output))
+	if err != nil {
+		return fmt.Errorf("run samba-tool: %w", err)
+	}
+	return nil
+}
+
+func redactGeneratedPassword(output []byte) []byte {
+	lines := strings.SplitAfter(string(output), "\n")
+	for index, line := range lines {
+		if location := generatedPasswordLine.FindStringIndex(line); location != nil {
+			ending := ""
+			if strings.HasSuffix(line, "\n") {
+				ending = "\n"
+			}
+			lines[index] = line[:location[1]] + " <redacted>" + ending
+		}
+	}
+	return []byte(strings.Join(lines, ""))
 }
 
 func configureKerberos(ctx context.Context) error {
@@ -347,4 +403,19 @@ func writeAtomically(path string, contents []byte) error {
 		return err
 	}
 	return os.Rename(temporaryPath, path)
+}
+
+// reverseRecordName returns the PTR owner name for address relative to reverseZone.
+func reverseRecordName(address, reverseZone string) (string, error) {
+	ip := net.ParseIP(address).To4()
+	if ip == nil {
+		return "", fmt.Errorf("IP must be an IPv4 address, got %q", address)
+	}
+	full := fmt.Sprintf("%d.%d.%d.%d.in-addr.arpa", ip[3], ip[2], ip[1], ip[0])
+	zone := strings.TrimSuffix(strings.ToLower(reverseZone), ".")
+	name, found := strings.CutSuffix(full, "."+zone)
+	if !found {
+		return "", fmt.Errorf("IP %s is not inside reverse zone %s", address, reverseZone)
+	}
+	return name, nil
 }

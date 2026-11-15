@@ -31,6 +31,19 @@ an overview of the project, start with the [project home page](../README.md).
   controller loss and controller replacement for multi-controller deployments.
 - [Troubleshooting](troubleshooting.md): common failures and diagnostics.
 
+## Which page to read
+
+Each topic has one home; other pages link to it rather than repeat it.
+
+| Need | Page |
+| --- | --- |
+| Decide between Docker, Kubernetes and multi-controller | [Getting started](getting-started.md) |
+| Install a deployment, step by step | [Docker](docker.md), [Kubernetes](kubernetes.md) or [Multi-controller Kubernetes](multi-controller.md) |
+| Look up a variable or Helm value | [Configuration reference](configuration.md) |
+| Routine work on any deployment: upgrades, rotation, backups | [Operations](operations.md) |
+| Act on a failed controller in a multi-controller deployment | [Operator procedures](operator-procedures.md) |
+| Understand why multi-controller mode works the way it does | [Multi-controller design](multi-controller-design.md) |
+
 ## Background and contributing
 
 - [Multi-controller design](multi-controller-design.md): design rationale and

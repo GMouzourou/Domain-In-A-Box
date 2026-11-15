@@ -1,0 +1,164 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dns-bridge.fullname" . }}
+  labels:
+    {{- include "dns-bridge.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "dns-bridge.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dns-bridge.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "dns-bridge.fullname" . }}
+      automountServiceAccountToken: false
+      shareProcessNamespace: false
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      hostAliases:
+        {{- range .Values.controllers }}
+        - ip: {{ .address | quote }}
+          hostnames: [{{ .hostname | lower | trimSuffix "." | quote }}]
+        {{- end }}
+      containers:
+        - name: external-dns
+          image: "{{ .Values.externalDNSImage.repository }}:{{ .Values.externalDNSImage.tag }}@{{ .Values.externalDNSImage.digest }}"
+          imagePullPolicy: {{ .Values.externalDNSImage.pullPolicy }}
+          args:
+            - --source=ingress
+            - --provider=webhook
+            - --webhook-provider-url=http://127.0.0.1:8888
+            - --webhook-provider-read-timeout=20s
+            - --webhook-provider-write-timeout=45s
+            - --domain-filter={{ include "dns-bridge.zone" . }}
+            - --fqdn-template={{ "{{.Name}}" }}.{{ include "dns-bridge.zone" . }}
+            - --registry=txt
+            - --txt-owner-id={{ .Values.ownerID }}
+            - --txt-prefix={{ .Values.txtPrefix }}
+            - --policy=sync
+            - --interval=60s
+            {{- if .Values.watchNamespace }}
+            - --namespace={{ .Values.watchNamespace }}
+            {{- end }}
+            {{- range .Values.ingressClassNames }}
+            - --ingress-class={{ . }}
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: 7979
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+          resources:
+            {{- toYaml .Values.externalDNSResources | nindent 12 }}
+          volumeMounts:
+            - name: kubernetes-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+        - name: dns-bridge
+          image: "{{ .Values.bridgeImage.repository }}:{{ .Values.bridgeImage.tag }}"
+          imagePullPolicy: {{ .Values.bridgeImage.pullPolicy }}
+          env:
+            - name: DIB_DNS_BRIDGE_CONFIG
+              value: /config/config.json
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/dib-external-dns-bridge", "health"]
+            timeoutSeconds: 30
+            periodSeconds: 20
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/dib-external-dns-bridge", "health", "--liveness"]
+            timeoutSeconds: 5
+            periodSeconds: 20
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/dib-external-dns-bridge", "health", "--liveness"]
+            timeoutSeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            {{- toYaml .Values.bridgeResources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: credentials
+              mountPath: /credentials
+              readOnly: true
+            - name: trust
+              mountPath: /trust
+              readOnly: true
+            - name: tickets
+              mountPath: /run/dib-dns
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "dns-bridge.fullname" . }}
+        - name: credentials
+          secret:
+            secretName: {{ required "credentials.existingSecret is required" .Values.credentials.existingSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.credentials.passwordKey }}
+                path: password
+        - name: trust
+          secret:
+            secretName: {{ required "trust.existingSecret is required" .Values.trust.existingSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.trust.caKey }}
+                path: ca.crt
+        - name: tickets
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+        - name: kubernetes-token
+          projected:
+            defaultMode: 0444
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 3600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+              - downwardAPI:
+                  items:
+                    - path: namespace
+                      fieldRef:
+                        fieldPath: metadata.namespace

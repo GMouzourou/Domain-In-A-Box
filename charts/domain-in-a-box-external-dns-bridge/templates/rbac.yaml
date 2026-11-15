@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "dns-bridge.fullname" . }}
+  labels:
+    {{- include "dns-bridge.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ if .Values.watchNamespace }}Role{{ else }}ClusterRole{{ end }}
+metadata:
+  name: {{ include "dns-bridge.rbacName" . }}
+  {{- if .Values.watchNamespace }}
+  namespace: {{ .Values.watchNamespace | quote }}
+  {{- end }}
+  labels:
+    {{- include "dns-bridge.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ if .Values.watchNamespace }}RoleBinding{{ else }}ClusterRoleBinding{{ end }}
+metadata:
+  name: {{ include "dns-bridge.rbacName" . }}
+  {{- if .Values.watchNamespace }}
+  namespace: {{ .Values.watchNamespace | quote }}
+  {{- end }}
+  labels:
+    {{- include "dns-bridge.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: {{ if .Values.watchNamespace }}Role{{ else }}ClusterRole{{ end }}
+  name: {{ include "dns-bridge.rbacName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "dns-bridge.fullname" . }}
+    namespace: {{ .Release.Namespace }}

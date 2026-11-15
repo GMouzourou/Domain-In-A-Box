@@ -1,4 +1,4 @@
-{{- if .Values.storkServer.enabled }}
+{{- if include "domain-in-a-box.storkServerEnabled" . }}
 {{- $port := ternary 443 80 .Values.tls.storkServer.enabled -}}
 apiVersion: v1
 kind: Service

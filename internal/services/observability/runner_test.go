@@ -26,7 +26,7 @@ func TestBootstrapLDAPSearchUserByControllerMode(t *testing.T) {
 			name:           "primary creates and configures the shared account",
 			controllerMode: "primary",
 			wantCalls: []string{
-				"user create ldap-search-user --description=Read-only LDAP Bind User test-password",
+				"user create ldap-search-user --description=Read-only LDAP Bind User stdin=test-password,test-password",
 				"user setexpiry ldap-search-user --noexpiry",
 			},
 		},
@@ -46,7 +46,13 @@ func TestBootstrapLDAPSearchUserByControllerMode(t *testing.T) {
 			t.Setenv("DIB_TEST_SAMBA_TOOL_CALLS", callsPath)
 			stub := `#!/bin/sh
 set -eu
-printf '%s\n' "$*" >> "$DIB_TEST_SAMBA_TOOL_CALLS"
+input=""
+if [ "$1 $2" = "user create" ]; then
+    read -r first
+    read -r second
+    input=" stdin=$first,$second"
+fi
+printf '%s%s\n' "$*" "$input" >> "$DIB_TEST_SAMBA_TOOL_CALLS"
 `
 			if err := os.WriteFile(filepath.Join(binDir, "samba-tool"), []byte(stub), 0o755); err != nil {
 				t.Fatal(err)
@@ -345,6 +351,7 @@ set -eu
 [ "$#" -eq 2 ]
 [ "$1" = register ]
 [ "$2" = --non-interactive ]
+[ "${STORK_AGENT_SERVER_TOKEN:-}" = test-server-token ]
 [ ! -e "$DIB_TEST_STORK_STATE/.stork-agent-registered" ]
 [ "$DIB_TEST_STORK_FAIL" != register ] || exit 1
 for file in root-cert.pem server-cert.pem server-key.pem token.txt server-cert.sha256; do
@@ -372,7 +379,7 @@ printf 'ownership updated\n' > "$3/ownership-updated"
 			}
 
 			const advertisedHost = "dib-stork-agent.domain-in-a-box.svc.cluster.local"
-			err := registerStorkAgent(context.Background(), state, advertisedHost, "--non-interactive")
+			err := registerStorkAgent(context.Background(), state, advertisedHost, "test-server-token", "--non-interactive")
 			if tc.fail != "" {
 				if err == nil || !strings.Contains(err.Error(), "exit status 1") {
 					t.Fatalf("registerStorkAgent() error = %v, want command failure", err)
@@ -381,7 +388,7 @@ printf 'ownership updated\n' > "$3/ownership-updated"
 					t.Fatalf("registration marker must not exist after failure; stat error = %v", err)
 				}
 				t.Setenv("DIB_TEST_STORK_FAIL", "")
-				err = registerStorkAgent(context.Background(), state, advertisedHost, "--non-interactive")
+				err = registerStorkAgent(context.Background(), state, advertisedHost, "test-server-token", "--non-interactive")
 			}
 			if err != nil {
 				t.Fatalf("registerStorkAgent() error = %v", err)

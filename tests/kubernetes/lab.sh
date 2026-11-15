@@ -29,6 +29,8 @@ STORK_IMAGE="${STORK_IMAGE:-domain-in-a-box-stork:ci}"
 CLIENT_IMAGE="${CLIENT_IMAGE:-domain-in-a-box-test-client:ci}"
 
 KIND_BIN="${KIND_BIN:-}"
+KIND_CONFIG="${KIND_CONFIG:-${SCRIPT_DIR}/kind-cluster.yaml}"
+STORK_TEST_NODE="${STORK_TEST_NODE:-}"
 TLS_DIR=""
 
 log() { echo "==> $*"; }
@@ -96,7 +98,8 @@ generate_test_tls_material() {
         -subj "/CN=Domain-In-A-Box Integration Test CA" \
         -addext "basicConstraints=critical,CA:TRUE" \
         -addext "keyUsage=critical,keyCertSign,cRLSign"
-    generate_test_server_certificate "${tls_dir}" controller "${controller_hostname}" "IP:192.168.3.1"
+    generate_test_server_certificate "${tls_dir}" controller "${controller_hostname}" \
+        "IP:192.168.3.1,DNS:${RELEASE}-0.domain.home.arpa"
     generate_test_server_certificate "${tls_dir}" stork "${stork_hostname}"
 }
 
@@ -127,6 +130,7 @@ render() {
         -e "s|__RELEASE__|${RELEASE}|g" \
         -e "s|__CLIENT_IMAGE__|${CLIENT_IMAGE}|g" \
         -e "s|__STORK_IP__|${STORK_IP:-}|g" \
+        -e "s|__NODE_NAME__|${NODE_NAME}|g" \
         "$1"
 }
 
@@ -156,7 +160,12 @@ cmd_up() {
         log "Cluster ${CLUSTER_NAME} already exists"
     else
         log "Creating kind cluster ${CLUSTER_NAME}"
-        "${KIND_BIN}" create cluster --name "${CLUSTER_NAME}" --config "${SCRIPT_DIR}/kind-cluster.yaml" --wait 120s
+        "${KIND_BIN}" create cluster --name "${CLUSTER_NAME}" --config "${KIND_CONFIG}" --wait 120s
+    fi
+    # Multi-node kind keeps this taint; the DC and DHCP client must share this node.
+    if kubectl get node "${NODE_NAME}" -o jsonpath='{.spec.taints[*].key}' \
+        | grep -qw 'node-role.kubernetes.io/control-plane'; then
+        kubectl taint node "${NODE_NAME}" node-role.kubernetes.io/control-plane:NoSchedule-
     fi
 
     if ! docker network inspect "${LAB_NETWORK}" > /dev/null 2>&1; then
@@ -191,9 +200,14 @@ cmd_build() {
     require_tools
 
     log "Building images"
-    docker build --target core -t "${CORE_IMAGE}" "${REPO_ROOT}"
-    docker build --target stork -t "${STORK_IMAGE}" "${REPO_ROOT}"
-    docker build -f "${REPO_ROOT}/tests/linux-client/Dockerfile" -t "${CLIENT_IMAGE}" "${REPO_ROOT}"
+    (
+        cd "${REPO_ROOT}"
+        RELEASE_VERSION="$(cat VERSION)" docker buildx bake -f docker-bake.hcl --load \
+            --set "core.tags=${CORE_IMAGE}" \
+            --set "stork.tags=${STORK_IMAGE}" \
+            --set "test-client.tags=${CLIENT_IMAGE}" \
+            core stork test-client
+    )
 }
 
 cmd_load() {
@@ -247,6 +261,11 @@ cmd_deploy() {
         --namespace "${NAMESPACE}" \
         --values "${SCRIPT_DIR}/values.ci.yaml" \
         --set fullnameOverride="${RELEASE}" \
+        --set "nodeSelector.kubernetes\.io/hostname=${NODE_NAME}" \
+        --set "coreImage.repository=${CORE_IMAGE%:*}" \
+        --set-string "coreImage.tag=${CORE_IMAGE##*:}" \
+        --set "storkImage.repository=${STORK_IMAGE%:*}" \
+        --set-string "storkImage.tag=${STORK_IMAGE##*:}" \
         --wait=false
 
     log "Waiting for the domain controller to become ready"
@@ -287,6 +306,13 @@ cmd_test() {
     STORK_IP=$(cluster_ip "${RELEASE}-stork-server")
     export STORK_IP
     local job="${RELEASE}-test-runner"
+
+    if [[ -n "${STORK_TEST_NODE}" ]]; then
+        log "Pinning Stork to the controller node for same-node callback validation"
+        kubectl -n "${NAMESPACE}" patch "deployment/${RELEASE}-stork-server" --type=merge \
+            -p "{\"spec\":{\"template\":{\"spec\":{\"nodeSelector\":{\"kubernetes.io/hostname\":\"${NODE_NAME}\"}}}}}"
+        kubectl -n "${NAMESPACE}" rollout status "deployment/${RELEASE}-stork-server" --timeout=300s
+    fi
 
     log "Waiting separately for Stork registration and exporter readiness"
     local stork_ready=false
@@ -329,6 +355,8 @@ cmd_test() {
                 echo "Stork agent registered ${registered_agent_host}, expected ${expected_agent_host}" >&2
                 return 1
             fi
+            kubectl -n "${NAMESPACE}" exec -i "${RELEASE}-0" -- python3 - \
+                < "${SCRIPT_DIR}/stork-management-test.py"
             log "Restarting Stork server and controller to check retained agent registration"
             kubectl -n "${NAMESPACE}" rollout restart "deployment/${RELEASE}-stork-server"
             kubectl -n "${NAMESPACE}" rollout status "deployment/${RELEASE}-stork-server" --timeout=300s
@@ -340,6 +368,82 @@ cmd_test() {
                 echo "Stork agent callback changed after restart: ${registered_agent_host}" >&2
                 return 1
             fi
+            kubectl -n "${NAMESPACE}" exec -i "${RELEASE}-0" -- python3 - \
+                < "${SCRIPT_DIR}/stork-management-test.py"
+            if [[ -n "${STORK_TEST_NODE}" ]]; then
+                if [[ "${STORK_TEST_NODE}" == "${NODE_NAME}" ]]; then
+                    echo "STORK_TEST_NODE must differ from the controller node" >&2
+                    return 1
+                fi
+                log "Moving Stork to ${STORK_TEST_NODE} for different-node callback validation"
+                kubectl -n "${NAMESPACE}" patch "deployment/${RELEASE}-stork-server" --type=merge \
+                    -p "{\"spec\":{\"template\":{\"spec\":{\"nodeSelector\":{\"kubernetes.io/hostname\":\"${STORK_TEST_NODE}\"}}}}}"
+                kubectl -n "${NAMESPACE}" rollout status "deployment/${RELEASE}-stork-server" --timeout=300s
+                kubectl -n "${NAMESPACE}" exec -i "${RELEASE}-0" -- python3 - \
+                    < "${SCRIPT_DIR}/stork-management-test.py"
+            fi
+            log "Checking that Stork rejects an incorrect LDAP certificate hostname"
+            kubectl -n "${NAMESPACE}" set env "deployment/${RELEASE}-stork-server" \
+                "STORK_LDAP_URL=ldaps://${RELEASE}-svc.${NAMESPACE}.svc:636"
+            kubectl -n "${NAMESPACE}" rollout status "deployment/${RELEASE}-stork-server" --timeout=300s
+            kubectl -n "${NAMESPACE}" exec -i "${RELEASE}-0" -- \
+                env STORK_TEST_EXPECT_LDAP_REJECTION=true python3 - \
+                < "${SCRIPT_DIR}/stork-management-test.py"
+            if ! kubectl -n "${NAMESPACE}" logs "deployment/${RELEASE}-stork-server" \
+                | grep -Fq 'certificate is valid for'; then
+                echo "LDAP login failed without the expected hostname verification error" >&2
+                return 1
+            fi
+            kubectl -n "${NAMESPACE}" set env "deployment/${RELEASE}-stork-server" \
+                "STORK_LDAP_URL=ldaps://${RELEASE}-svc.${NAMESPACE}.svc.cluster.local:636"
+
+            log "Checking that Stork rejects an untrusted LDAP root"
+            TLS_DIR=$(mktemp -d)
+            trap cleanup_tls_material EXIT
+            openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 2 \
+                -keyout "${TLS_DIR}/ca.key" -out "${TLS_DIR}/ca.crt" \
+                -subj "/CN=Wrong LDAP Test CA"
+            kubectl -n "${NAMESPACE}" create secret generic wrong-ldap-ca \
+                --from-file=ca.crt="${TLS_DIR}/ca.crt" --dry-run=client -o yaml | kubectl apply -f -
+            cleanup_tls_material
+            kubectl -n "${NAMESPACE}" patch "deployment/${RELEASE}-stork-server" --type=strategic \
+                -p '{"spec":{"template":{"spec":{"volumes":[{"name":"ldap-ca","secret":{"secretName":"wrong-ldap-ca"}}]}}}}'
+            kubectl -n "${NAMESPACE}" rollout status "deployment/${RELEASE}-stork-server" --timeout=300s
+            kubectl -n "${NAMESPACE}" exec -i "${RELEASE}-0" -- \
+                env STORK_TEST_EXPECT_LDAP_REJECTION=true python3 - \
+                < "${SCRIPT_DIR}/stork-management-test.py"
+            if ! kubectl -n "${NAMESPACE}" logs "deployment/${RELEASE}-stork-server" \
+                | grep -Fq 'certificate signed by unknown authority'; then
+                echo "LDAP login failed without the expected root verification error" >&2
+                return 1
+            fi
+            kubectl -n "${NAMESPACE}" patch "deployment/${RELEASE}-stork-server" --type=strategic \
+                -p '{"spec":{"template":{"spec":{"volumes":[{"name":"ldap-ca","secret":{"secretName":"controller-tls"}}]}}}}'
+            kubectl -n "${NAMESPACE}" rollout status "deployment/${RELEASE}-stork-server" --timeout=300s
+            kubectl -n "${NAMESPACE}" exec -i "${RELEASE}-0" -- python3 - \
+                < "${SCRIPT_DIR}/stork-management-test.py"
+            kubectl -n "${NAMESPACE}" delete secret wrong-ldap-ca
+            local initial_restarts current_restarts recovered=false
+            initial_restarts=$(kubectl -n "${NAMESPACE}" get pod "${RELEASE}-0" \
+                -o jsonpath='{.status.containerStatuses[?(@.name=="domain-server")].restartCount}')
+            log "Stopping BIND intentionally to exercise liveness independently of the watchdog"
+            kubectl -n "${NAMESPACE}" exec "${RELEASE}-0" -- supervisorctl stop bind
+            for _ in $(seq 1 60); do
+                current_restarts=$(kubectl -n "${NAMESPACE}" get pod "${RELEASE}-0" \
+                    -o jsonpath='{.status.containerStatuses[?(@.name=="domain-server")].restartCount}')
+                if [[ "${current_restarts:-0}" -gt "${initial_restarts:-0}" ]]; then
+                    recovered=true
+                    break
+                fi
+                sleep 5
+            done
+            if [[ "${recovered}" != true ]]; then
+                echo "Liveness did not restart the controller after BIND stopped" >&2
+                return 1
+            fi
+            kubectl -n "${NAMESPACE}" rollout status "statefulset/${RELEASE}" --timeout=900s
+            kubectl -n "${NAMESPACE}" exec -i "${RELEASE}-0" -- python3 - \
+                < "${SCRIPT_DIR}/stork-management-test.py"
             log "Test suite passed"
             log "Stork agent uses the internal callback Service ${expected_agent_host} after restarts"
             return 0

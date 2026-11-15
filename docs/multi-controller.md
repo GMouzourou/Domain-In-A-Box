@@ -42,7 +42,7 @@ a partition from a host loss, so both behave the same.
 | Group Policy edits | Only the primary accepts SYSVOL and NETLOGON file writes. The secondary rejects them at all times. | Synchronization resumes. | Do not edit Group Policy while the primary is down. | A Group Policy Management operation writes AD metadata separately from its SYSVOL files. If it targets the secondary, the AD part may succeed while the file part fails, leaving them inconsistent. Repeat the edit on the primary after recovery. |
 | DHCP (with DHCP HA) | **Primary lost:** existing leases continue until they expire; renewals and new clients get no answer. **Secondary lost:** no effect. | Withdraw the secondary's authority before restarting the primary's DHCP service, then confirm lease synchronization. | If the primary is down longer than clients can tolerate: confirm its host is off, then run the [DHCP takeover](operator-procedures.md#take-over-dhcp-on-the-secondary). | Without action, clients lose connectivity as leases expire. Enabling the secondary while the primary is still running can hand out duplicate addresses. Returning authority causes a short, deliberate DHCP outage. |
 | DNS servers given to DHCP clients | Clients receive only the serving controller's address. | No change. | None | DHCP clients do not automatically fail over DNS to the other controller. Tracking: [#45](https://github.com/GMouzourou/Domain-In-A-Box/issues/45). |
-| DDNS from DHCP | Each controller updates its own AD DNS with its own service account. | Replication converges. | None | Records updated on one controller may briefly differ between controllers. |
+| DDNS from DHCP | The controller serving DHCP updates its own AD DNS with its own service account. | Replication converges. After a takeover the secondary renews and removes records the primary registered. | None | Records updated on one controller may briefly differ between controllers. |
 | FSMO roles | Roles stay with their holder (normally the primary). | No change. | Only after permanent loss: seize the roles. | While the PDC emulator is down, there is no domain time-hierarchy root and Group Policy Management must target the secondary explicitly. Schema and domain-naming changes, and RID pool refills (after about 500 new objects), wait for the holder. |
 | Time (NTP) | Each controller serves time from its host's clock. | No change. | None | Each host needs its own time synchronization; Chrony runs with `-x` and does not set the host clock. |
 | Monitoring (Stork, PostgreSQL) | Monitoring may be unavailable; the domain keeps running. | Registration and exporters recover. | None for domain services. | No visibility while monitoring is down. PostgreSQL failover is not tested. |
@@ -113,7 +113,10 @@ out of source control.
 
 Create one credentials Secret (shared by both releases) and a controller TLS
 Secret per controller, as described in [Kubernetes](kubernetes.md#1-create-the-namespace-and-secrets)
-and [Certificates](certificates.md#kubernetes-secrets).
+and [Certificates](certificates.md#kubernetes-secrets). The chart derives the
+Secret names from each release's `fullnameOverride`: `dib-primary-controller-tls`,
+`dib-secondary-controller-tls`, and `dib-primary-stork-server-tls` for the
+Stork server that both controllers use.
 
 ### 3. Install the primary
 
@@ -122,24 +125,17 @@ and [Certificates](certificates.md#kubernetes-secrets).
 fullnameOverride: dib-primary
 domain:
   realm: AD.HOME.ARPA
-  name: AD
   controllerMode: primary
-  dhcpEnabled: true
   dhcpPool: 192.168.1.100-192.168.1.199
+peer:
+  address: 192.168.1.10
 sysvolSync:
   enabled: true
   secretName: dib-sysvol-writer
-  peerAddress: 192.168.1.10
 multus:
-  networkName: dib-primary-macvlan
   masterInterface: eth0
   address: 192.168.1.8/24
   gateway: 192.168.1.254
-tls:
-  controller:
-    secretName: dib-primary-controller-tls
-  storkServer:
-    secretName: dib-primary-stork-server-tls
 nodeSelector:
   kubernetes.io/hostname: node1
 ```
@@ -158,27 +154,17 @@ Wait until the primary is Ready, then:
 fullnameOverride: dib-secondary
 domain:
   realm: AD.HOME.ARPA
-  name: AD
   controllerMode: secondary
-  joinServer: 192.168.1.8
-  dhcpEnabled: false
+peer:
+  address: 192.168.1.8
+  name: dib-primary
 sysvolSync:
   enabled: true
   secretName: dib-sysvol-reader
-  writerAddress: 192.168.1.8
-storkServer:
-  enabled: false
-  host: dib-primary-stork-server.dib.svc.cluster.local
 multus:
-  networkName: dib-secondary-macvlan
   masterInterface: eth0
   address: 192.168.1.10/24
   gateway: 192.168.1.254
-tls:
-  controller:
-    secretName: dib-secondary-controller-tls
-  storkServer:
-    secretName: dib-primary-stork-server-tls
 nodeSelector:
   kubernetes.io/hostname: node2
 ```
@@ -205,11 +191,11 @@ does not overlap another server's range. Add to **both** values files:
 ```yaml
 dhcpHA:
   enabled: true
-  primaryAddress: 192.168.1.8
-  standbyAddress: 192.168.1.10
 ```
 
-Keep `domain.dhcpEnabled: true` on the primary and `false` on the secondary.
+The chart derives the primary and standby addresses from `multus.address` and
+`peer.address`. The primary serves DHCP and the secondary runs Kea as its
+standby; leave `domain.dhcpEnabled` unset on both.
 
 ### 6. Verify
 

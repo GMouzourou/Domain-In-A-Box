@@ -1,5 +1,5 @@
-{{- if .Values.storkServer.enabled }}
-{{- $ldapCASecret := default .Values.tls.controller.secretName .Values.tls.ldap.caSecretName -}}
+{{- if include "domain-in-a-box.storkServerEnabled" . }}
+{{- $ldapCASecret := default (include "domain-in-a-box.controllerTLSSecret" .) .Values.tls.ldap.caSecretName -}}
 {{- $clusterDomain := default "cluster.local" .Values.clusterDNS.domain -}}
 {{- $ldapHost := default (printf "%s-svc.%s.svc.%s" (include "domain-in-a-box.fullname" .) .Release.Namespace $clusterDomain) .Values.tls.ldap.serverName -}}
 apiVersion: apps/v1
@@ -30,11 +30,22 @@ spec:
         k8s.v1.cni.cncf.io/networks: '[{ "name": "{{ .Values.multus.storkServerNetworkName }}" }]'
       {{- end }}
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # Startup reconciles CA trust and the root-owned server environment.
+        runAsUser: 0
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: stork-server
           image: "{{ .Values.storkImage.repository }}:{{ .Values.storkImage.tag }}"
           imagePullPolicy: {{ .Values.storkImage.pullPolicy }}
           args: ["run"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, DAC_OVERRIDE, FOWNER, NET_BIND_SERVICE]
           env:
             - name: DIB_OBSERVABILITY_COMPONENT
               value: "stork-server"
@@ -149,7 +160,7 @@ spec:
         {{- if .Values.tls.storkServer.enabled }}
         - name: stork-server-tls
           secret:
-            secretName: {{ .Values.tls.storkServer.secretName | quote }}
+            secretName: {{ include "domain-in-a-box.storkServerTLSSecret" . | quote }}
             defaultMode: 0400
             items:
               - key: {{ .Values.tls.storkServer.certificateKey | quote }}

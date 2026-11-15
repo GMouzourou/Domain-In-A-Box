@@ -57,11 +57,14 @@ func NewDHCPHACommand(runner *Runner) *cobra.Command {
 		Short: "Enable DHCP on the standby after confirming the primary is off",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runner.DHCPHATakeover(cmd.Context(), confirmPrimaryOff, acceptUnsentUpdates)
+			return runner.DHCPHATakeover(cmd.Context(), confirmPrimaryOff)
 		},
 	}
 	takeover.Flags().BoolVar(&confirmPrimaryOff, "confirm-primary-off", false, "confirm the primary host is powered off or permanently lost")
-	takeover.Flags().BoolVar(&acceptUnsentUpdates, "accept-unsent-updates", false, "accept possible lease divergence when Kea reports unsent updates")
+	// Kea's unsent-update-count is cumulative and never reset, so it cannot
+	// gate a takeover. The flag remains accepted for existing runbooks.
+	takeover.Flags().BoolVar(&acceptUnsentUpdates, "accept-unsent-updates", false, "deprecated; has no effect")
+	_ = takeover.Flags().MarkDeprecated("accept-unsent-updates", "the unsent-update gate was removed; the flag has no effect")
 	command.AddCommand(takeover)
 
 	var confirmPrimaryDHCPStopped bool
@@ -95,7 +98,7 @@ func (r *Runner) DHCPHAStatus(ctx context.Context) (DHCPHAStatus, error) {
 	return response.Arguments, nil
 }
 
-func (r *Runner) DHCPHATakeover(ctx context.Context, confirmPrimaryOff, acceptUnsentUpdates bool) error {
+func (r *Runner) DHCPHATakeover(ctx context.Context, confirmPrimaryOff bool) error {
 	if !confirmPrimaryOff {
 		return errors.New("refusing DHCP takeover without --confirm-primary-off")
 	}
@@ -112,9 +115,6 @@ func (r *Runner) DHCPHATakeover(ctx context.Context, confirmPrimaryOff, acceptUn
 	primaryName := configuredDHCPHAPrimaryName()
 	if containsString(status.Scopes, primaryName) {
 		return errors.New("refusing DHCP takeover: standby already reports the primary DHCP scope")
-	}
-	if status.UnsentUpdateCount > 0 && !acceptUnsentUpdates {
-		return fmt.Errorf("Kea reports %d unsent lease updates; inspect lease divergence and explicitly use --accept-unsent-updates only if promotion is still acceptable", status.UnsentUpdateCount)
 	}
 	response, err := sendKeaControlCommand(ctx, keaControlSocketPath(), "ha-scopes", map[string]any{
 		"scopes": []string{primaryName},

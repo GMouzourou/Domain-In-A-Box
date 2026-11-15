@@ -87,6 +87,40 @@ provision a new domain.
 - **Certificate changes have no effect:** certificates are read at start-up.
   See [Certificate rotation](operations.md#certificate-rotation).
 
+## GSSAPI binds over LDAPS fail with `80090346` / `data 35b`
+
+With OpenLDAP 2.6.10 and Samba 4.23.6, this error can indicate missing or
+incompatible TLS channel binding, not an incorrect Kerberos password.
+Obtain a ticket with `kinit`, trust the controller CA, and use a controller
+FQDN present in both its certificate and its LDAP service principal:
+
+```bash
+LDAPTLS_CACERT=/path/to/ca.crt LDAPTLS_REQCERT=demand \
+LDAPSASL_NOCANON=on LDAPSASL_CBINDING=tls-endpoint \
+ldapsearch -LLL -Y GSSAPI -O minssf=0,maxssf=0 \
+  -H ldaps://dib-primary.domain.home.arpa \
+  -b DC=domain,DC=home,DC=arpa -s base dn
+```
+
+TLS provides encryption here; disabling the additional SASL security layer
+does **not** disable TLS. Without this setting, successful channel binding
+can instead produce `Sign or Seal are not allowed if TLS is used`.
+Do not disable certificate verification or Samba's strong-auth requirement.
+If reverse DNS canonicalizes the controller to a different name, set
+`rdns = false` in the client's Kerberos configuration.
+
+Alternatively, use GSSAPI encryption on LDAP without TLS:
+
+```bash
+ldapsearch -LLL -Y GSSAPI -O minssf=56 \
+  -H ldap://dib-primary.domain.home.arpa \
+  -b DC=domain,DC=home,DC=arpa -s base dn
+```
+
+These settings were verified with `ldapsearch`; they do not establish support
+for `adcli --use-ldaps`, which has separate client behavior. Normal adcli joins
+using encrypted LDAP/SASL remain the tested path.
+
 ## Stork shows no machines or cannot log in
 
 - The agent registers with the Stork server when the controller starts. Check
@@ -98,6 +132,10 @@ provision a new domain.
   restart it.
 - Logins use Active Directory over LDAPS. Check that the user is in Domain
   Users or Domain Admins, and that Stork trusts the controller's CA.
+- In Kubernetes, `ldaps-relay` must be running when the controller has a separate
+  LAN interface. Check `supervisorctl status ldaps-relay` in the controller and
+  its logs for listener or upstream connection errors. The chart supplies the
+  pod IP through `DIB_LDAPS_RELAY_ADDRESS`; it must not be a wildcard address.
 
 Stork problems do not affect domain, DNS or DHCP service.
 
@@ -109,6 +147,23 @@ Stork problems do not affect domain, DNS or DHCP service.
 - In a multi-controller deployment with the primary down, the standby does not
   serve DHCP until an operator
   [takes over](operator-procedures.md#take-over-dhcp-on-the-secondary).
+
+## DHCP client names are missing from DNS
+
+- Check the logs for `DDNS register` lines. `ignoring DDNS request` means the
+  client sent a name outside the AD domain, a reserved name or an address
+  outside the subnet.
+- `forward=not-owned` or `reverse=not-owned` means a record with that name or
+  address already exists and was not created by the controller for this
+  client. Remove the stale record
+  if it is wrong; the client is registered at its next renewal.
+- Domain-joined Windows computers register their own `A` records.
+
+## The controller restarts repeatedly
+
+A core service keeps failing, so the [watchdog](operations.md#automatic-recovery)
+stops the controller. Search the logs for `ERROR [watchdog]` to find the service,
+then read that service's first error before the restart.
 
 ## Multi-controller checks
 

@@ -3,27 +3,58 @@
 coreImage:
   repository: ghcr.io/gmouzourou/domain-in-a-box
   pullPolicy: IfNotPresent
-  tag: "0.5.1"
+  tag: "0.6.0"
 
 storkImage:
   repository: ghcr.io/gmouzourou/domain-in-a-box-stork
   pullPolicy: IfNotPresent
-  tag: "0.5.1"
+  tag: "0.6.0"
+
+security:
+  # Compatibility escape hatch only; normal controllers use explicit capabilities.
+  privileged: false
+
+networkPolicy:
+  # Applies to the primary pod network, not Multus/macvlan LAN attachments.
+  enabled: false
+  # Additional Kubernetes NetworkPolicy rules for clients, metrics and external dependencies.
+  ingress: []
+  egress: []
 
 domain:
   realm: "DOMAIN.HOME.ARPA"
-  name: "DOMAIN"
+  # NetBIOS domain name. Empty uses the realm's first label, for example DOMAIN.
+  name: ""
+  # primary provisions the domain; secondary joins the controller at peer.address.
   controllerMode: primary
+  # Override for the controller a secondary joins. Empty uses peer.address.
   joinServer: ""
   interface: "net1"
-  dhcpEnabled: true
+  # Serve DHCP from this controller. Unset defaults to true for a primary and
+  # false for a secondary; a DHCP HA standby runs DHCP through dhcpHA instead.
+  # dhcpEnabled: true
   dhcpPool: "192.168.1.100-192.168.1.199"
+  # Comma-separated IPv4 resolvers advertised to DHCP clients. Empty advertises
+  # this controller, followed by its partner when dhcpHA is enabled.
+  dhcpDNSServers: ""
   dnsForwarders: "1.1.1.1; 8.8.8.8;"
+  # Reverse DNS zone. Empty derives it from the LAN prefix (/8, /16, or /24 and
+  # longer); set it for other prefixes, for example "168.192.in-addr.arpa".
+  reverseZone: ""
   syncPasswordOnRestart: false
+
+# The other controller of a primary/secondary pair. Set on both controllers.
+peer:
+  # LAN IPv4 address of the other controller.
+  address: ""
+  # Resource name (fullnameOverride) of the primary. Required on a secondary to
+  # find the primary's Stork server Service and its TLS Secret.
+  name: ""
 
 dhcpHA:
   # Enable only when configuring the fixed primary/standby pair.
   enabled: false
+  # Overrides. Empty uses this controller's multus.address and peer.address.
   primaryAddress: ""
   standbyAddress: ""
   primaryName: "dib-primary"
@@ -40,6 +71,7 @@ sysvolSync:
   clientPrivateKeyKey: "id_ed25519"
   clientPublicKeyKey: "id_ed25519.pub"
   knownHostsKey: "known_hosts"
+  # Overrides. Empty uses peer.address.
   peerAddress: ""
   writerAddress: ""
   sshPort: 22
@@ -57,8 +89,11 @@ metrics:
   port: 9922
 
 storkServer:
-  enabled: true
-  # Set this to the singleton Stork server for a secondary controller.
+  # Run the Stork server and its database with this release. Unset defaults to
+  # true for a primary and false for a secondary, which uses the primary's.
+  # enabled: true
+  # Override for the Stork server address. Empty derives it from the release
+  # that runs Stork (peer.name on a secondary).
   host: ""
   resources:
     requests:
@@ -76,7 +111,8 @@ clusterDNS:
 multus:
   enabled: true
   createNAD: true
-  networkName: "macvlan-network"
+  # NetworkAttachmentDefinition name. Empty uses <fullname>-macvlan.
+  networkName: ""
   # Optional LAN attachment for deployments that need the Stork server on an
   # external network. The default agent callback uses an internal Service.
   storkServerNetworkName: ""
@@ -87,14 +123,17 @@ multus:
 tls:
   controller:
     # Existing Secret containing the controller certificate, key, and CA.
-    secretName: "domain-in-a-box-controller-tls"
+    # Unset uses <fullname>-controller-tls; an empty string disables it.
+    # secretName: ""
     certificateKey: "tls.crt"
     privateKeyKey: "tls.key"
     caKey: "ca.crt"
   storkServer:
     enabled: true
     # Existing Secret containing the Stork REST server certificate and key.
-    secretName: "domain-in-a-box-stork-server-tls"
+    # Empty uses <stork owner>-stork-server-tls, where the owner is this
+    # release for a primary and peer.name for a secondary.
+    secretName: ""
     certificateKey: "tls.crt"
     privateKeyKey: "tls.key"
     # CA trusted by the controller when it connects to the Stork REST service.

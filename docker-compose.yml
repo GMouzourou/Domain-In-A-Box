@@ -1,53 +1,114 @@
 services:
+  # 0. One-shot job that keeps the service passwords in the dib-secrets volume.
+  # Values set in .env are written there; otherwise each password is generated
+  # once and reused.
+  secrets:
+    image: postgres:18-alpine@sha256:1018733457011bf88d81db98cf43aac6d5150afc18787dbe204771fedf80ff95
+    restart: "no"
+    network_mode: none
+    environment:
+      DIB_LDAP_PASSWORD: "${DIB_LDAP_PASSWORD:-}"
+      STORK_DATABASE_PASSWORD: "${STORK_DATABASE_PASSWORD:-}"
+    entrypoint: ["/bin/sh", "-euc"]
+    command:
+      - |
+        umask 077
+        store() {
+          file=/run/dib-secrets/$$1
+          if [ -n "$$2" ]; then
+            printf '%s\n' "$$2" > "$$file.tmp"
+          elif [ ! -s "$$file" ]; then
+            tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32 > "$$file.tmp"
+          else
+            return 0
+          fi
+          mv "$$file.tmp" "$$file"
+        }
+        store ldap-password "$${DIB_LDAP_PASSWORD:-}"
+        store stork-database-password "$${STORK_DATABASE_PASSWORD:-}"
+    volumes:
+      - dib-secrets:/run/dib-secrets
+
   # 1. Main Core Container (Samba AD DC, BIND9, Kea DHCP & Chrony NTP)
   domain-controller:
     build:
       context: .
       dockerfile: Dockerfile
       target: core
-    image: ghcr.io/gmouzourou/domain-in-a-box:0.5.1
+    image: ghcr.io/gmouzourou/domain-in-a-box:0.6.0
     hostname: domain-server
     container_name: domain-in-a-box
     restart: unless-stopped
-    privileged: true
+    privileged: ${DIB_PRIVILEGED:-false}
+    cap_drop:
+      - ALL
     cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - DAC_READ_SEARCH
+      - FOWNER
+      - FSETID
+      - SETGID
+      - SETUID
+      - SETPCAP
+      - NET_BIND_SERVICE
       - NET_ADMIN
       - NET_RAW
+      - SYS_CHROOT
+      - SYS_PTRACE
+      - SYS_ADMIN
+      - SETFCAP
+      - KILL
+    depends_on:
+      secrets:
+        condition: service_completed_successfully
+    secrets:
+      - domain_admin_password
     networks:
       domain_net:
-        # Set the static IP address for the domain controller – ensure it fits your network plan
-        ipv4_address: "192.168.1.1"
+        ipv4_address: "${DIB_CONTROLLER_IP:-192.168.1.1}"
+        # Name both interfaces: Docker does not keep network order across
+        # restarts, and DIB_INTERFACE must stay the LAN.
+        interface_name: eth0
+      stork_database_net:
+        interface_name: eth1
     environment:
       # DIB_REALM: Specify your Kerberos/AD realm
       DIB_REALM: "${DIB_REALM:-DOMAIN.HOME.ARPA}"
-      # DIB_DOMAIN: Specify your short domain name
-      DIB_DOMAIN: "${DIB_DOMAIN:-DOMAIN}"
-      # DIB_DOMAIN_ADMIN_PASSWORD: Set the domain administrator password used during provisioning
-      DIB_DOMAIN_ADMIN_PASSWORD: "${DIB_DOMAIN_ADMIN_PASSWORD:?Set DIB_DOMAIN_ADMIN_PASSWORD in .env}"
+      # DIB_DOMAIN: Optional NetBIOS domain name; empty uses the realm's first label
+      DIB_DOMAIN: "${DIB_DOMAIN:-}"
+      # The domain administrator password comes from DIB_DOMAIN_ADMIN_PASSWORD in .env as a Compose secret
+      DIB_DOMAIN_ADMIN_PASSWORD_FILE: /run/secrets/domain_admin_password
       # DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART: Set true if you want the env value to override manual AD password changes on restart
       DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART: "${DIB_SYNC_DOMAIN_ADMIN_PASSWORD_ON_RESTART:-false}"
       # Shared with Stork Server for LDAP authentication
-      DIB_LDAP_PASSWORD: "${DIB_LDAP_PASSWORD:?Set DIB_LDAP_PASSWORD in .env}"
+      DIB_LDAP_PASSWORD_FILE: /run/dib-secrets/ldap-password
       # DIB_INTERFACE: The controller's LAN interface inside the container (eth0 for a single macvlan network)
       DIB_INTERFACE: "${DIB_INTERFACE:-eth0}"
       # DIB_DHCP_POOL: Define the DHCP range to lease addresses from; updates are applied on restart
       DIB_DHCP_POOL: "${DIB_DHCP_POOL:-192.168.1.100-192.168.1.199}"
+      # DIB_DHCP_DNS_SERVERS: Comma-separated DNS servers for DHCP clients; empty advertises this controller
+      DIB_DHCP_DNS_SERVERS: "${DIB_DHCP_DNS_SERVERS:-}"
+      # DIB_REVERSE_ZONE: Optional reverse DNS zone; empty derives it from the /8, /16 or /24-and-longer LAN prefix
+      DIB_REVERSE_ZONE: "${DIB_REVERSE_ZONE:-}"
       # DIB_DNS_FORWARDERS: Set your upstream DNS servers; updates are applied on restart
       DIB_DNS_FORWARDERS: "${DIB_DNS_FORWARDERS:-1.1.1.1; 8.8.8.8;}"
       # DIB_SAMBA_METRICS_ENABLED: Enable Samba metrics
       DIB_SAMBA_METRICS_ENABLED: "${DIB_SAMBA_METRICS_ENABLED:-true}"
       # DIB_SAMBA_METRICS_PORT: Samba metrics port
       DIB_SAMBA_METRICS_PORT: "${DIB_SAMBA_METRICS_PORT:-9922}"
-      STORK_DATABASE_HOST: "${STORK_DATABASE_HOST:-192.168.1.2}"
+      # The controller resolves names through its own DNS, so it reaches the
+      # bundled database by address.
+      STORK_DATABASE_HOST: "${STORK_DATABASE_HOST:-172.31.255.2}"
       STORK_DATABASE_PORT: "${STORK_DATABASE_PORT:-5432}"
       STORK_DATABASE_NAME: "${STORK_DATABASE_NAME:-stork}"
       STORK_DATABASE_USER_NAME: "${STORK_DATABASE_USER_NAME:-stork}"
-      STORK_DATABASE_PASSWORD: "${STORK_DATABASE_PASSWORD:?Set STORK_DATABASE_PASSWORD in .env}"
+      STORK_DATABASE_PASSWORD_FILE: /run/dib-secrets/stork-database-password
       STORK_DATABASE_SSLMODE: "${STORK_DATABASE_SSLMODE:-disable}"
       STORK_DATABASE_SSLROOTCERT: "${STORK_DATABASE_SSLROOTCERT:-/etc/stork/postgresql-tls/ca.crt}"
       DIB_STORK_DATABASE_EXTERNAL: "${DIB_STORK_DATABASE_EXTERNAL:-false}"
       DIB_ALLOW_INSECURE_POSTGRESQL: "${DIB_ALLOW_INSECURE_POSTGRESQL:-false}"
-      STORK_SERVER_HOST: "${STORK_SERVER_HOST:-192.168.1.3}"
+      STORK_SERVER_HOST: "${STORK_SERVER_HOST:-${DIB_STORK_IP:-192.168.1.3}}"
       STORK_SERVER_PORT: "${STORK_SERVER_PORT:-443}"
       STORK_SERVER_SCHEME: "${STORK_SERVER_SCHEME:-https}"
       DIB_ALLOW_INSECURE_STORK_HTTP: "${DIB_ALLOW_INSECURE_STORK_HTTP:-false}"
@@ -67,20 +128,26 @@ services:
       - "${DIB_POSTGRES_TLS_DIR:-./certs/postgresql}:/etc/stork/postgresql-tls:ro"
       - samba-data:/var/lib/samba
       - log-data:/var/log
+      - dib-secrets:/run/dib-secrets:ro
   # 2. Separate PostgreSQL Service (Used when user hasn't brought their own external Postgres)
   postgres:
     image: postgres:18-alpine@sha256:1018733457011bf88d81db98cf43aac6d5150afc18787dbe204771fedf80ff95
     container_name: dib-postgres
     restart: unless-stopped
+    depends_on:
+      secrets:
+        condition: service_completed_successfully
     environment:
       POSTGRES_DB: stork
       POSTGRES_USER: stork
-      POSTGRES_PASSWORD: "${STORK_DATABASE_PASSWORD:?Set STORK_DATABASE_PASSWORD in .env}"
+      POSTGRES_PASSWORD_FILE: /run/dib-secrets/stork-database-password
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
+      - dib-secrets:/run/dib-secrets:ro
+    # Internal network only: the database is not reachable from the LAN.
     networks:
-      domain_net:
-        ipv4_address: "192.168.1.2"
+      stork_database_net:
+        ipv4_address: "172.31.255.2"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U stork -d stork"]
       interval: 5s
@@ -93,17 +160,20 @@ services:
       context: .
       dockerfile: Dockerfile
       target: stork
-    image: ghcr.io/gmouzourou/domain-in-a-box-stork:0.5.1
+    image: ghcr.io/gmouzourou/domain-in-a-box-stork:0.6.0
     container_name: dib-stork-server
     restart: unless-stopped
     command: ["run"]
+    depends_on:
+      secrets:
+        condition: service_completed_successfully
     environment:
       DIB_OBSERVABILITY_COMPONENT: "stork-server"
       STORK_REST_HOST: "0.0.0.0"
       STORK_LDAP_DOMAIN: "${DIB_REALM:-DOMAIN.HOME.ARPA}"
       STORK_LDAP_HOST: "${STORK_LDAP_HOST:-domain-server}"
-      STORK_LDAP_URL: "${STORK_LDAP_URL:-ldaps://192.168.1.1:636}"
-      STORK_LDAP_PASSWORD: "${DIB_LDAP_PASSWORD:?Set DIB_LDAP_PASSWORD in .env}"
+      STORK_LDAP_URL: "${STORK_LDAP_URL:-ldaps://${DIB_CONTROLLER_IP:-192.168.1.1}:636}"
+      STORK_LDAP_PASSWORD_FILE: /run/dib-secrets/ldap-password
       DIB_LDAP_CA_CERTIFICATE: "/etc/dib-trust/ldap/ca.pem"
       STORK_SERVER_HOOK_LDAP_SKIP_SERVER_TLS_VERIFICATION: "${STORK_LDAP_SKIP_SERVER_VERIFICATION:-false}"
       DIB_ALLOW_INSECURE_LDAP_TLS: "${DIB_ALLOW_INSECURE_LDAP_TLS:-false}"
@@ -111,7 +181,7 @@ services:
       STORK_DATABASE_PORT: "${STORK_DATABASE_PORT:-5432}"
       STORK_DATABASE_NAME: "${STORK_DATABASE_NAME:-stork}"
       STORK_DATABASE_USER_NAME: "${STORK_DATABASE_USER_NAME:-stork}"
-      STORK_DATABASE_PASSWORD: "${STORK_DATABASE_PASSWORD:?Set STORK_DATABASE_PASSWORD in .env}"
+      STORK_DATABASE_PASSWORD_FILE: /run/dib-secrets/stork-database-password
       STORK_DATABASE_SSLMODE: "${STORK_DATABASE_SSLMODE:-disable}"
       STORK_DATABASE_SSLROOTCERT: "${STORK_DATABASE_SSLROOTCERT:-/etc/stork/postgresql-tls/ca.crt}"
       DIB_STORK_DATABASE_EXTERNAL: "${DIB_STORK_DATABASE_EXTERNAL:-false}"
@@ -125,9 +195,12 @@ services:
       - "${DIB_STORK_SERVER_TLS_DIR:-./certs/stork-server}:/certs:ro"
       - "${DIB_CONTROLLER_TLS_DIR:-./certs/controller}:/etc/dib-trust/ldap:ro"
       - "${DIB_POSTGRES_TLS_DIR:-./certs/postgresql}:/etc/stork/postgresql-tls:ro"
+      - dib-secrets:/run/dib-secrets:ro
     networks:
       domain_net:
-        ipv4_address: "192.168.1.3"
+        ipv4_address: "${DIB_STORK_IP:-192.168.1.3}"
+        priority: 100
+      stork_database_net:
 
 networks:
   domain_net:
@@ -136,10 +209,24 @@ networks:
       parent: ${DIB_PARENT_INTERFACE:-eth0} # Host interface on your LAN
     ipam:
       config:
-        - subnet: "192.168.1.0/24" # Adjust to match your local network subnet
-          gateway: "192.168.1.254" # Set this to your network's gateway
+        - subnet: "${DIB_LAN_SUBNET:-192.168.1.0/24}"
+          gateway: "${DIB_LAN_GATEWAY:-192.168.1.254}"
+  stork_database_net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        # Private to the host; change it only if it overlaps a network the
+        # controller must reach, and update the PostgreSQL address to match.
+        - subnet: "172.31.255.0/29"
+          ip_range: "172.31.255.4/30"
+
+secrets:
+  domain_admin_password:
+    environment: DIB_DOMAIN_ADMIN_PASSWORD
 
 volumes:
+  dib-secrets:
   bind-config:
   bind-data:
   chrony-config:

@@ -2,13 +2,14 @@ package network
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
 
 // ListSMBShares authenticates to the server and returns the advertised SMB shares.
 func ListSMBShares(host, port, username, password, workgroup string) (string, error) {
-	args := []string{"-m", "SMB3", "-g", "-L", fmt.Sprintf("//%s", host), "-U", username, "--password=" + password}
+	args := []string{"-m", "SMB3", "-g", "-L", fmt.Sprintf("//%s", host), "-U", username}
 	if workgroup != "" {
 		args = append(args, "-W", workgroup)
 	}
@@ -16,7 +17,7 @@ func ListSMBShares(host, port, username, password, workgroup string) (string, er
 		args = append(args, "-p", port)
 	}
 
-	cmd := exec.Command("smbclient", args...)
+	cmd := smbclient(password, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("listing SMB shares failed: %w\n%s", err, strings.TrimSpace(string(output)))
@@ -35,11 +36,18 @@ func ReadSMBShare(host, port, share, username, password, workgroup string) (stri
 		args = append(args, "-p", port)
 	}
 
-	cmd := exec.Command("smbclient", args...)
+	cmd := smbclient(password, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("reading SMB share %s failed: %w\n%s", share, err, strings.TrimSpace(string(output)))
 	}
 
 	return string(output), nil
+}
+
+// smbclient reads the password from PASSWD so that it is not visible in the process table.
+func smbclient(password string, args ...string) *exec.Cmd {
+	cmd := exec.Command("smbclient", args...)
+	cmd.Env = append(os.Environ(), "PASSWD="+password)
+	return cmd
 }

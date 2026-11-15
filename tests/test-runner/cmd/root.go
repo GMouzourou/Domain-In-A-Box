@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
 
 var rootCmd = &cobra.Command{
@@ -42,16 +41,6 @@ func InitFlags() {
 	rootCmd.PersistentFlags().String("server-hostname", envOrDefault(defaultHostname, "SERVER_HOSTNAME", "TESTRUNNER_SERVER_HOSTNAME"), "Server hostname")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose output")
 
-	viper.BindPFlag("domain-controller", rootCmd.PersistentFlags().Lookup("domain-controller"))
-	viper.BindPFlag("realm", rootCmd.PersistentFlags().Lookup("realm"))
-	viper.BindPFlag("dns-domain", rootCmd.PersistentFlags().Lookup("dns-domain"))
-	viper.BindPFlag("admin-user", rootCmd.PersistentFlags().Lookup("admin-user"))
-	viper.BindPFlag("admin-password", rootCmd.PersistentFlags().Lookup("admin-password"))
-	viper.BindPFlag("server-hostname", rootCmd.PersistentFlags().Lookup("server-hostname"))
-	viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
-
-	viper.SetEnvPrefix("TESTRUNNER")
-	viper.AutomaticEnv()
 }
 
 // TestFailureError represents a test suite failure (not a command execution error)
@@ -136,10 +125,4 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("unknown suite: %s (valid: all, health, dns, dhcp, ad, ad-linux)", suite)
 		}
 	},
-}
-
-func init() {
-	cobra.OnInitialize(func() {
-		viper.ReadInConfig()
-	})
 }

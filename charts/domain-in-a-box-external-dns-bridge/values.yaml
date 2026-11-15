@@ -1,0 +1,40 @@
+# Required operator choices; this chart never changes the controller release.
+realm: ""
+# DNS zone to publish into. Empty uses the lower-cased realm.
+zone: ""
+username: ""
+ownerID: ""
+controllers: []
+allowedNetworks: []
+protectedNames: []
+txtPrefix: dib-edns-
+defaultTTL: 60
+watchNamespace: ""
+ingressClassNames: []
+credentials:
+  existingSecret: ""
+  passwordKey: password
+trust:
+  existingSecret: ""
+  caKey: ca.crt
+bridgeImage:
+  repository: ghcr.io/gmouzourou/domain-in-a-box-external-dns-bridge
+  tag: "0.6.0"
+  pullPolicy: IfNotPresent
+externalDNSImage:
+  repository: registry.k8s.io/external-dns/external-dns
+  tag: v0.24.0
+  digest: sha256:a80a146d2540fa138565e404f0625157271071a06093021f27ae19d8316d10f9
+  pullPolicy: IfNotPresent
+bridgeResources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+externalDNSResources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    memory: 256Mi

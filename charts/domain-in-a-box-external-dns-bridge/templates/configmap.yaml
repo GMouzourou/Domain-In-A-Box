@@ -1,0 +1,15 @@
+{{- $realm := required "realm must be explicitly configured" .Values.realm -}}
+{{- $zone := include "dns-bridge.zone" . -}}
+{{- $username := required "username must be a provisioned dedicated identity" .Values.username -}}
+{{- $owner := required "ownerID must be explicitly configured and stable" .Values.ownerID -}}
+{{- if not .Values.controllers }}{{ fail "controllers must be explicitly configured" }}{{ end -}}
+{{- if not .Values.allowedNetworks }}{{ fail "allowedNetworks must be explicitly configured" }}{{ end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dns-bridge.fullname" . }}
+  labels:
+    {{- include "dns-bridge.labels" . | nindent 4 }}
+data:
+  config.json: |
+    {{- dict "realm" $realm "zone" $zone "username" $username "ownerID" $owner "controllers" .Values.controllers "allowedNetworks" .Values.allowedNetworks "protectedNames" .Values.protectedNames "txtPrefix" .Values.txtPrefix "defaultTTL" .Values.defaultTTL "listen" "127.0.0.1:8888" "passwordFile" "/credentials/password" "caFile" "/trust/ca.crt" | toJson | nindent 4 }}

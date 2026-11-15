@@ -9,7 +9,7 @@ controller with its own address on your LAN:
 | --- | --- | --- |
 | Domain controller | Samba AD DC | Active Directory, Kerberos, LDAP/LDAPS, SMB (SYSVOL and NETLOGON), Group Policy storage |
 | DNS | Samba AD DNS with BIND9 | Samba answers clients on port 53 for the AD zones; BIND resolves everything else through your upstream forwarders |
-| DHCP | Kea DHCPv4 and Kea DDNS | Address leases, with client names registered in AD DNS using GSS-TSIG |
+| DHCP | Kea DHCPv4 and dynamic DNS | Address leases, with client names registered in AD DNS using GSS-TSIG |
 | Time | Chrony | NTP for domain members, so Kerberos clocks stay aligned |
 | Monitoring | ISC Stork agent and server, PostgreSQL | Dashboards for Kea and BIND, Prometheus metrics for Samba, BIND and Kea |
 

@@ -1,277 +1,156 @@
-.PHONY: help build build-stork test test-unit test-dns test-dhcp test-ad test-ad-linux test-all test-prebuilt test-verbose test-clean lint version-check release-version shellcheck hadolint helm-lint docker-lint push push-docker push-ghcr dev-up dev-down dev-logs k8s-up k8s-build k8s-load k8s-images k8s-deploy k8s-test k8s-logs k8s-down k8s-all clean
+# Run `make help` to list the developer targets.
+.DEFAULT_GOAL := help
 
-# Default target
-help:
-	@echo "  make release-version RELEASE_VERSION=X.Y.Z  Update all release pins"
-	@echo "  make version-check                        Check release consistency"
-	@echo "Domain-In-A-Box Development Commands"
-	@echo ""
-	@echo "Build & Image:"
-	@echo "  make build                 Build Docker image locally"
-	@echo "  make build-test-client     Build test client image"
-	@echo ""
-	@echo "Testing:"
-	@echo "  make test-all              Run all tests with docker-compose"
-	@echo "  make test-prebuilt         Run all tests against already-built images"
-	@echo "  make test-unit             Run Go unit tests for the test runner"
-	@echo "  make test-verbose          Run tests with verbose output"
-	@echo "  make test-health           Run health check tests"
-	@echo "  make test-dns              Run DNS resolution tests"
-	@echo "  make test-dhcp             Run DHCP functionality tests"
-	@echo "  make test-ad               Run Active Directory tests"
-	@echo "  make test-ad-linux         Run Linux AD join tests"
-	@echo ""
-	@echo "Kubernetes (kind + Multus/macvlan):"
-	@echo "  make k8s-all               Provision, deploy and test end to end"
-	@echo "  make k8s-up                Create the kind cluster with Multus"
-	@echo "  make k8s-images            Build and load images into the cluster"
-	@echo "  make k8s-build             Build the images only"
-	@echo "  make k8s-load              Load already-built images into the cluster"
-	@echo "  make k8s-deploy            Install the Helm chart"
-	@echo "  make k8s-test              Run the test suite in the cluster"
-	@echo "  make k8s-logs              Collect cluster diagnostics"
-	@echo "  make k8s-down              Delete the cluster and lab network"
-	@echo ""
-	@echo "Local Development:"
-	@echo "  make dev-up                Start domain controller for development"
-	@echo "  make dev-down              Stop development environment"
-	@echo "  make dev-logs              View development logs"
-	@echo "  make dev-exec              Execute bash in running container"
-	@echo ""
-	@echo "Linting & Validation:"
-	@echo "  make lint                  Run all linting checks"
-	@echo "  make shellcheck            Lint shell scripts"
-	@echo "  make hadolint              Lint Dockerfile"
-	@echo "  make helm-lint             Lint and render the Helm chart"
-	@echo "  make docker-lint           Validate docker-compose files"
-	@echo ""
-	@echo "Cleanup:"
-	@echo "  make test-clean            Clean up test environment"
-	@echo "  make clean                 Remove all containers and volumes"
-	@echo ""
-	@echo "Publishing:"
-	@echo "  make push-docker           Push to Docker Hub (requires secrets)"
-	@echo "  make push-ghcr             Push to GitHub Container Registry"
-	@echo ""
-	@echo "Examples:"
-	@echo "  # Run all tests"
-	@echo "  make test-all"
-	@echo ""
-	@echo "  # Start dev environment and run tests"
-	@echo "  make dev-up && make test-all && make dev-down"
-	@echo ""
-	@echo "  # Run specific test"
-	@echo "  make test-dns VERBOSE=true"
-
-# Image version
 VERSION ?= latest
 IMAGE_NAME ?= domain-in-a-box
 STORK_IMAGE_NAME ?= domain-in-a-box-stork
+BRIDGE_IMAGE_NAME ?= domain-in-a-box-external-dns-bridge
 REGISTRY ?= gmouzourou
 COMPOSE ?= docker compose
+BAKE = TAG="$(VERSION)" REGISTRY="$(REGISTRY)" IMAGE_NAME="$(IMAGE_NAME)" STORK_IMAGE_NAME="$(STORK_IMAGE_NAME)" BRIDGE_IMAGE_NAME="$(BRIDGE_IMAGE_NAME)" RELEASE_VERSION="$$(cat VERSION)" docker buildx bake -f docker-bake.hcl
+TEST_COMPOSE = $(COMPOSE) -f tests/docker-compose.test.yml
+DEV_COMPOSE = $(COMPOSE) -f docker-compose.yml
 
-# Build targets
-build:
-	@echo "Building Domain-In-A-Box image..."
-	docker build --target core -t $(REGISTRY)/$(IMAGE_NAME):$(VERSION) .
-	@echo "✓ Build complete: $(REGISTRY)/$(IMAGE_NAME):$(VERSION)"
+SHELL_SCRIPTS = tests/linux-client/entrypoint.sh tests/linux-client/ldap-gssapi-test.sh tests/kubernetes/lab.sh tests/kubernetes/helm-chart-test.sh
+HADOLINT_IMAGE = hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
+HADOLINT_IGNORES = --ignore DL3008 --ignore DL3015 --ignore DL3018
 
-build-stork:
-	@echo "Building Domain-In-A-Box Stork image..."
-	docker build --target stork -t ghcr.io/$(REGISTRY)/$(STORK_IMAGE_NAME):$(VERSION) .
-	@echo "✓ Build complete: ghcr.io/$(REGISTRY)/$(STORK_IMAGE_NAME):$(VERSION)"
+.PHONY: help build build-stork build-bridge build-test-client \
+	test-unit test-all test-prebuilt test-clean test-verbose test-health test-dns test-dhcp test-ad test-ad-linux \
+	lint version-check release-version go-lint shellcheck hadolint docker-lint helm-lint markdown-link-check \
+	k8s-all k8s-up k8s-images k8s-build k8s-load k8s-deploy k8s-test k8s-logs k8s-down \
+	dev-up dev-down dev-logs dev-exec clean
 
-build-test-client:
-	@echo "Building test client image..."
-	docker build -t $(REGISTRY)/$(IMAGE_NAME)-test-client:$(VERSION) -f tests/linux-client/Dockerfile .
-	@echo "✓ Build complete: $(REGISTRY)/$(IMAGE_NAME)-test-client:$(VERSION)"
+##@ General
+help: ## Show this help
+	@awk 'BEGIN {FS = ":.*## "} /^##@/ {printf "\n%s:\n", substr($$0, 5)} /^[a-zA-Z0-9_-]+:.*## / {printf "  make %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@echo ""
+	@echo "Example: make dev-up && make test-all && make dev-down"
 
-# Test targets
-test-all: test-clean
-	@echo "Starting integration tests..."
-	$(COMPOSE) -f tests/docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test-runner
-	@echo "✓ Tests complete"
+##@ Build
+build: ## Build the core image
+	$(BAKE) --load core
 
-# Same suite, but reuses whatever images are already tagged locally.
-test-prebuilt: test-clean
-	@echo "Starting integration tests with prebuilt images..."
-	$(COMPOSE) -f tests/docker-compose.test.yml up --abort-on-container-exit --exit-code-from test-runner
-	@echo "✓ Tests complete"
+build-stork: ## Build the Stork server image
+	$(BAKE) --load stork
 
-test-clean:
-	@echo "Cleaning up test environment..."
-	$(COMPOSE) -f tests/docker-compose.test.yml down -v
-	@echo "✓ Test environment cleaned"
+build-bridge: ## Build the optional ExternalDNS bridge image
+	$(BAKE) --load external-dns-bridge
 
-test-unit:
-	@echo "Running Go unit tests..."
+build-test-client: ## Build the Linux test client image
+	$(BAKE) --load test-client
+
+##@ Test
+test-unit: ## Run the Go unit tests for the product and the test runner
+	go test ./...
 	cd tests/test-runner && go test ./...
-	@echo "✓ Unit tests complete"
 
-test-verbose: VERBOSE=true
-test-verbose:
-	@echo "Running tests with verbose output..."
+test-all: test-clean ## Build the images and run the Compose integration suite
+	$(TEST_COMPOSE) up --build --abort-on-container-exit --exit-code-from test-runner
+
+test-prebuilt: test-clean ## Run the Compose integration suite with already-built images
+	$(TEST_COMPOSE) up --abort-on-container-exit --exit-code-from test-runner
+
+test-clean: ## Remove the integration test containers and volumes
+	$(TEST_COMPOSE) down -v
+
+test-verbose: ## Run every test-runner check against a running stack, verbosely
 	cd tests/test-runner && go run . run all --verbose
-	@echo "✓ Verbose tests complete"
 
-test-health:
-	@echo "Running health checks..."
+test-health: ## Run the health checks against a running stack
 	cd tests/test-runner && go run . run health
 
-test-dns:
-	@echo "Running DNS tests..."
+test-dns: ## Run the DNS checks against a running stack
 	cd tests/test-runner && go run . run dns
 
-test-dhcp:
-	@echo "Running DHCP tests..."
+test-dhcp: ## Run the DHCP checks against a running stack
 	cd tests/test-runner && go run . run dhcp
 
-test-ad:
-	@echo "Running Active Directory tests..."
+test-ad: ## Run the Active Directory checks against a running stack
 	cd tests/test-runner && go run . run ad
 
-test-ad-linux:
-	@echo "Running Linux AD join tests..."
+test-ad-linux: ## Run the Linux AD join checks against a running stack
 	cd tests/test-runner && go run . run ad-linux
 
-# Linting targets
-version-check:
+##@ Lint
+lint: version-check go-lint shellcheck hadolint docker-lint helm-lint markdown-link-check ## Run every lint check
+
+version-check: ## Check that release versions and pins agree
 	go run ./cmd/dib-release-ctl check
 
-release-version:
+release-version: ## Update every release pin: make release-version RELEASE_VERSION=X.Y.Z
 	go run ./cmd/dib-release-ctl update $(RELEASE_VERSION)
 
-lint: version-check shellcheck hadolint docker-lint helm-lint
-	@echo "✓ All linting checks passed"
+go-lint: ## Lint and format-check both Go modules with golangci-lint
+	@command -v golangci-lint >/dev/null 2>&1 || { echo "golangci-lint is required" >&2; exit 1; }
+	golangci-lint run ./...
+	cd tests/test-runner && golangci-lint run ./...
 
-shellcheck:
-	@echo "Linting shell scripts..."
-	@if command -v shellcheck &> /dev/null; then \
-		shellcheck -x entrypoint.sh tests/linux-client/entrypoint.sh tests/kubernetes/lab.sh tests/kubernetes/helm-chart-test.sh; \
-		echo "✓ Shell scripts checked"; \
-	else \
-		echo "⚠ shellcheck not available"; \
-	fi
+shellcheck: ## Lint the shell scripts
+	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck is required" >&2; exit 1; }
+	shellcheck -x $(SHELL_SCRIPTS)
 
-hadolint:
-	@echo "Linting Dockerfile..."
-	@if command -v hadolint &> /dev/null; then \
-		hadolint Dockerfile || true; \
-		echo "✓ Dockerfile checked"; \
-	else \
-		echo "⚠ hadolint not available"; \
-	fi
+hadolint: ## Lint the Dockerfiles with a pinned hadolint image
+	docker run --rm -i $(HADOLINT_IMAGE) hadolint $(HADOLINT_IGNORES) - < Dockerfile
+	docker run --rm -i $(HADOLINT_IMAGE) hadolint $(HADOLINT_IGNORES) - < tests/linux-client/Dockerfile
 
-docker-lint:
-	@echo "Validating docker-compose files..."
-	DIB_DOMAIN_ADMIN_PASSWORD=LintOnly-Admin123! DIB_LDAP_PASSWORD=LintOnly-Ldap123! STORK_DATABASE_PASSWORD=LintOnly-Database123! $(COMPOSE) -f docker-compose.yml config > /dev/null
-	$(COMPOSE) -f tests/docker-compose.test.yml config > /dev/null
-	@echo "✓ Docker Compose files valid"
+docker-lint: ## Validate the Compose files
+	$(DEV_COMPOSE) config > /dev/null
+	$(TEST_COMPOSE) config > /dev/null
 
-helm-lint:
-	@echo "Linting Helm chart..."
-	@if command -v helm &> /dev/null; then \
-		helm lint charts/domain-in-a-box; \
-		helm template dib charts/domain-in-a-box > /dev/null; \
-		helm template dib charts/domain-in-a-box -f tests/kubernetes/values.ci.yaml > /dev/null; \
-		bash tests/kubernetes/helm-chart-test.sh; \
-		echo "✓ Helm chart valid"; \
-	else \
-		echo "⚠ helm not available"; \
-	fi
+helm-lint: ## Lint, render and test both Helm charts
+	@command -v helm >/dev/null 2>&1 || { echo "helm is required" >&2; exit 1; }
+	helm lint charts/domain-in-a-box
+	helm template dib charts/domain-in-a-box > /dev/null
+	helm template dib charts/domain-in-a-box -f tests/kubernetes/values.ci.yaml > /dev/null
+	bash tests/kubernetes/helm-chart-test.sh
+	helm lint charts/domain-in-a-box-external-dns-bridge -f tests/dnsbridge/values.ci.yaml
+	helm template dns charts/domain-in-a-box-external-dns-bridge -f tests/dnsbridge/values.ci.yaml > /dev/null
 
-# Kubernetes lab targets (kind + Multus/macvlan)
-k8s-up:
+markdown-link-check: ## Check Markdown links offline
+	@command -v lychee >/dev/null 2>&1 || { echo "lychee is required" >&2; exit 1; }
+	lychee --offline --include-fragments README.md docs/*.md
+
+##@ Kubernetes lab (kind + Multus/macvlan)
+k8s-all: k8s-up k8s-images k8s-deploy k8s-test ## Provision, deploy and test end to end
+
+k8s-up: ## Create the kind cluster with Multus
 	tests/kubernetes/lab.sh up
 
-k8s-images:
+k8s-images: ## Build and load the images into the cluster
 	tests/kubernetes/lab.sh images
 
-k8s-build:
+k8s-build: ## Build the lab images only
 	tests/kubernetes/lab.sh build
 
-k8s-load:
+k8s-load: ## Load already-built images into the cluster
 	tests/kubernetes/lab.sh load
 
-k8s-deploy:
+k8s-deploy: ## Install the Helm chart
 	tests/kubernetes/lab.sh deploy
 
-k8s-test:
+k8s-test: ## Run the test suite in the cluster
 	tests/kubernetes/lab.sh test
 
-k8s-logs:
+k8s-logs: ## Collect cluster diagnostics
 	tests/kubernetes/lab.sh logs
 
-k8s-down:
+k8s-down: ## Delete the cluster and lab network
 	tests/kubernetes/lab.sh down
 
-k8s-all: k8s-up k8s-images k8s-deploy k8s-test
+##@ Local development
+dev-up: ## Build and start the Compose stack from .env
+	$(DEV_COMPOSE) up --build -d
 
-# Development targets
-dev-up:
-	@echo "Starting development environment..."
-	$(COMPOSE) -f docker-compose.yml up --build -d
-	@echo "✓ Development environment started"
-	@echo ""
-	@echo "Services available at:"
-	@echo "  DNS:     192.168.1.1:53"
-	@echo "  LDAP:    192.168.1.1:389"
-	@echo "  Kerberos: 192.168.1.1:88"
-	@echo "  SMB:     192.168.1.1:445"
-	@echo ""
-	@echo "Run 'make dev-logs' to see logs"
-	@echo "Run 'make dev-down' to stop"
+dev-down: ## Stop the Compose stack and DELETE its volumes
+	$(DEV_COMPOSE) down -v
 
-dev-down:
-	@echo "Stopping development environment..."
-	$(COMPOSE) -f docker-compose.yml down -v
-	@echo "✓ Development environment stopped"
+dev-logs: ## Follow the Compose stack logs
+	$(DEV_COMPOSE) logs -f
 
-dev-logs:
-	$(COMPOSE) -f docker-compose.yml logs -f
+dev-exec: ## Open a shell in the running controller
+	$(DEV_COMPOSE) exec domain-controller bash
 
-dev-exec:
-	@echo "Entering development container..."
-	$(COMPOSE) -f docker-compose.yml exec domain-controller bash
-
-dev-shell:
-	@echo "Opening shell in test runner..."
-	$(COMPOSE) -f tests/docker-compose.test.yml exec test-runner bash
-
-# Cleanup targets
-clean:
-	@echo "Removing containers and volumes..."
-	$(COMPOSE) -f docker-compose.yml down -v 2>/dev/null || true
-	$(COMPOSE) -f tests/docker-compose.test.yml down -v 2>/dev/null || true
-	@echo "✓ Cleanup complete"
-
-# Publishing targets
-push-docker:
-	@echo "Pushing to Docker Hub..."
-	@if [ -z "$(DOCKER_USERNAME)" ] || [ -z "$(DOCKER_PASSWORD)" ]; then \
-		echo "Error: DOCKER_USERNAME and DOCKER_PASSWORD required"; \
-		exit 1; \
-	fi
-	docker tag $(REGISTRY)/$(IMAGE_NAME):$(VERSION) $(REGISTRY)/$(IMAGE_NAME):latest
-	docker push $(REGISTRY)/$(IMAGE_NAME):$(VERSION)
-	docker push $(REGISTRY)/$(IMAGE_NAME):latest
-	@echo "✓ Pushed to Docker Hub"
-
-push-ghcr:
-	@echo "Pushing core and Stork images to GitHub Container Registry..."
-	@if [ -z "$(GITHUB_TOKEN)" ]; then \
-		echo "Error: GITHUB_TOKEN required"; \
-		exit 1; \
-	fi
-	docker tag $(REGISTRY)/$(IMAGE_NAME):$(VERSION) ghcr.io/$(REGISTRY)/$(IMAGE_NAME):$(VERSION)
-	docker push ghcr.io/$(REGISTRY)/$(IMAGE_NAME):$(VERSION)
-	docker build --target stork -t ghcr.io/$(REGISTRY)/$(STORK_IMAGE_NAME):$(VERSION) .
-	docker push ghcr.io/$(REGISTRY)/$(STORK_IMAGE_NAME):$(VERSION)
-	@echo "✓ Pushed core and Stork images to GitHub Container Registry"
-
-# Utility targets
-docker-prune:
-	@echo "Pruning Docker resources..."
-	docker system prune -f
-	@echo "✓ Docker resources pruned"
-
+clean: ## Remove the development and test stacks and their volumes
+	-$(DEV_COMPOSE) down -v
+	-$(TEST_COMPOSE) down -v
