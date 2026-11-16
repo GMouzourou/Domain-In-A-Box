@@ -68,14 +68,14 @@ func (lc *LDAPClient) Connect() (*ldap.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		conn, err := ldap.DialTLS("tcp", addr, tlsConfig)
+		conn, err := ldap.DialURL("ldaps://"+addr, ldap.DialWithTLSConfig(tlsConfig))
 		if err != nil {
 			return nil, fmt.Errorf("LDAP TLS connection failed: %w", err)
 		}
 		return conn, nil
 	}
 
-	conn, err := ldap.Dial("tcp", addr)
+	conn, err := ldap.DialURL("ldap://" + addr)
 	if err != nil {
 		return nil, fmt.Errorf("LDAP connection failed: %w", err)
 	}

@@ -3,7 +3,7 @@ services:
   # Values set in .env are written there; otherwise each password is generated
   # once and reused.
   secrets:
-    image: postgres:18-alpine@sha256:1018733457011bf88d81db98cf43aac6d5150afc18787dbe204771fedf80ff95
+    image: postgres:18-alpine@sha256:b6972e1115a4ff8eba5d7f7d19184926d1e16d7d1136ae1e1a7ebf286da0f015
     restart: "no"
     network_mode: none
     environment:
@@ -35,7 +35,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: core
-    image: ghcr.io/gmouzourou/domain-in-a-box:0.6.0
+    image: ghcr.io/gmouzourou/domain-in-a-box:0.6.1
     hostname: domain-server
     container_name: domain-in-a-box
     restart: unless-stopped
@@ -131,7 +131,7 @@ services:
       - dib-secrets:/run/dib-secrets:ro
   # 2. Separate PostgreSQL Service (Used when user hasn't brought their own external Postgres)
   postgres:
-    image: postgres:18-alpine@sha256:1018733457011bf88d81db98cf43aac6d5150afc18787dbe204771fedf80ff95
+    image: postgres:18-alpine@sha256:b6972e1115a4ff8eba5d7f7d19184926d1e16d7d1136ae1e1a7ebf286da0f015
     container_name: dib-postgres
     restart: unless-stopped
     depends_on:
@@ -160,7 +160,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: stork
-    image: ghcr.io/gmouzourou/domain-in-a-box-stork:0.6.0
+    image: ghcr.io/gmouzourou/domain-in-a-box-stork:0.6.1
     container_name: dib-stork-server
     restart: unless-stopped
     command: ["run"]

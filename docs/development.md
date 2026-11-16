@@ -17,6 +17,10 @@ before starting work.
 
 ## Building
 
+All Go modules and builders require Go 1.27.4 or newer. CI reads the version
+from the module files; the controller and Linux test-client Dockerfiles use
+the matching digest-pinned Go builder rather than Ubuntu's Go package.
+
 ```bash
 make build         # controller image
 make build-stork   # Stork image
@@ -69,6 +73,11 @@ make lint   # release pins, Go, shell, Dockerfiles, Compose, Helm charts and Mar
 `helm`, `lychee` and Docker; hadolint runs from a pinned container image. Each
 check fails if its tool is missing, and CI calls the same Make targets.
 
+The current validation toolchain uses Helm v4.3.2, ShellCheck v0.11.0 and
+lychee v0.24.2. Run `make go-mod-check go-vulncheck` to check both module files
+without modifying them and scan application/test calls with pinned
+govulncheck v1.9.0. CI runs these checks as well as Trivy.
+
 Go code is checked with the repository's [`.golangci.yml`](../.golangci.yml),
 which also enforces `gofmt`. Suppress a finding only with an inline
 `//nolint:<linter> // reason` comment that explains why the code is safe.
@@ -84,7 +93,9 @@ you change chart behaviour.
 [`build-and-test.yml`](../.github/workflows/build-and-test.yml) runs on pull
 requests and pushes. It runs:
 
-- a Trivy security scan;
+- Trivy scans of dependency manifests and every built OCI image; HIGH/CRITICAL
+  runtime findings block publishing;
+- module consistency and reachable Go vulnerability checks for both modules;
 - Go linting and formatting, Markdown link checks, shellcheck, hadolint, and Compose and
   Helm validation;
 - Go tests and builds;
@@ -121,6 +132,39 @@ its test subnet; use the isolated bridge acceptance instead.
 
 Images are published to `ghcr.io/gmouzourou/` (and to Docker Hub when its
 credentials are configured) only from `main` and `v*` release tags.
+
+## Dependency maintenance
+
+Dependabot checks Go modules, Dockerfiles and GitHub Actions weekly. Minor/patch
+Go and Actions updates are grouped; major updates are reviewed separately.
+Keep both modules aligned and migrate deprecated APIs rather than suppressing
+their diagnostics. Review release notes for major updates before merging.
+
+Pins outside Dependabot's manifests need explicit review: PostgreSQL images in
+Compose/Helm, the ExternalDNS tag/digest, kind/node images, Multus/CNI downloads,
+hadolint, scanner versions, the promotion utility, and the Samba source
+commit/archive checksum. Update every consumer together and verify checksums,
+image identities and the integration suites. Native package versions come from
+Ubuntu/ISC repositories; rebuild their cached stages when checking for package
+updates and inspect the resulting SBOMs.
+
+The current Kubernetes test set is kind v0.33.0 with its digest-pinned
+Kubernetes v1.37.0 node image, Multus v4.3.2 and CNI plugins v1.10.0. CI uses
+kubectl v1.37.2. Use this compatible node image rather than assuming any newer
+Kubernetes image is supported by kind.
+The lab replaces the upstream Multus manifest's `snapshot` image references
+with the selected stable release tag.
+
+Ubuntu 26.04 remains the shared base: 26.10 no longer packages
+`isc-dhcp-client`, which the Linux client's DHCP checks require. Replacing that
+client needs a separately tested migration before raising the OS floor.
+The Samba metrics source remains pinned to the stable 4.23.13 release; upgrade
+it with the distribution's Samba libraries rather than independently selecting
+the newest upstream major. The stable Skopeo image currently packages v1.24.1,
+so the promotion helper uses that verified image instead of an unavailable
+v1.25.1 image tag. Pin its registry image-index digest, not a local image ID.
+CI pulls and runs the pinned promotion tool on pull requests as well as pushes,
+so an unavailable pin is caught before the publish-only job.
 
 ## Releasing
 

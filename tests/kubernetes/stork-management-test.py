@@ -1,30 +1,70 @@
 """Run inside a controller to verify Stork's live agent callbacks."""
 
+import http.client
 import http.cookiejar
 import json
 import os
 import socket
 import ssl
+import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 
-def connect_with_retry(host: str, port: int, timeout: float = 60) -> socket.socket:
+def connect_with_retry(
+    host: str,
+    port: int,
+    timeout: float = 60,
+    *,
+    source_address: tuple[str, int] | None = None,
+) -> socket.socket:
     deadline = time.monotonic() + timeout
     while True:
         remaining = deadline - time.monotonic()
         try:
             connection_timeout = min(10, max(remaining, 0.1))
-            return socket.create_connection((host, port), timeout=connection_timeout)
+            return socket.create_connection(
+                (host, port), timeout=connection_timeout, source_address=source_address
+            )
         except OSError as error:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(
                     f"Could not connect to Stork at {host}:{port} within {timeout:g}s"
                 ) from error
+            print(f"Stork connection to {host}:{port} failed: {error}; retrying", file=sys.stderr)
             time.sleep(min(1, remaining))
+
+
+def connect_http_with_retry(address, timeout, source_address):
+    connection = connect_with_retry(*address, source_address=source_address)
+    connection.settimeout(timeout)
+    return connection
+
+
+# Retry socket setup only, before any HTTP request can be sent.
+class RetryingHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = connect_http_with_retry
+
+
+class RetryingHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = connect_http_with_retry
+
+
+class RetryingHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, request):
+        return self.do_open(RetryingHTTPConnection, request)
+
+
+class RetryingHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, request):
+        return self.do_open(RetryingHTTPSConnection, request, context=self._context)
 
 
 def main() -> None:
@@ -55,7 +95,9 @@ def main() -> None:
 
     base = f"{scheme}://{host}:{port}/api"
     opener = urllib.request.build_opener(
-        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+        RetryingHTTPHandler(),
+        RetryingHTTPSHandler(),
     )
     method = os.environ.get("STORK_TEST_AUTH_METHOD", "ldap")
     if method == "ldap":

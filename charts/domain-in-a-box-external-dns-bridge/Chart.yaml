@@ -2,5 +2,5 @@ apiVersion: v2
 name: domain-in-a-box-external-dns-bridge
 description: Optional pod-local ExternalDNS bridge for Domain-In-A-Box
 type: application
-version: 0.6.0
-appVersion: "0.6.0"
+version: 0.6.1
+appVersion: "0.6.1"

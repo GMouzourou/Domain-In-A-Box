@@ -20,9 +20,9 @@ LAB_SUBNET="${LAB_SUBNET:-192.168.3.0/24}"
 LAB_GATEWAY="${LAB_GATEWAY:-192.168.3.254}"
 NODE_LAB_IP="${NODE_LAB_IP:-192.168.3.2}"
 
-KIND_VERSION="${KIND_VERSION:-v0.27.0}"
-MULTUS_VERSION="${MULTUS_VERSION:-v4.1.4}"
-CNI_PLUGINS_VERSION="${CNI_PLUGINS_VERSION:-v1.6.2}"
+KIND_VERSION="${KIND_VERSION:-v0.33.0}"
+MULTUS_VERSION="${MULTUS_VERSION:-v4.3.2}"
+CNI_PLUGINS_VERSION="${CNI_PLUGINS_VERSION:-v1.10.0}"
 
 CORE_IMAGE="${CORE_IMAGE:-domain-in-a-box:ci}"
 STORK_IMAGE="${STORK_IMAGE:-domain-in-a-box-stork:ci}"
@@ -114,6 +114,8 @@ ensure_kind() {
     log "Installing kind ${KIND_VERSION}"
     mkdir -p "${TOOL_DIR}"
     curl -fsSLo "${TOOL_DIR}/kind" "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64"
+    curl -fsSLo "${TOOL_DIR}/kind.sha256sum" "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64.sha256sum"
+    printf '%s  %s\n' "$(awk '{print $1}' "${TOOL_DIR}/kind.sha256sum")" "${TOOL_DIR}/kind" | sha256sum --check -
     chmod +x "${TOOL_DIR}/kind"
     KIND_BIN="${TOOL_DIR}/kind"
 }
@@ -139,8 +141,8 @@ cluster_ip() {
 }
 
 wait_for_multus_runtime() {
-    log "Waiting for the node runtime to load the Multus CNI configuration"
-    for _ in $(seq 1 60); do
+    log "Waiting up to 5 minutes for the node runtime to load the Multus CNI configuration"
+    for _ in $(seq 1 300); do
         if docker exec "${NODE_NAME}" crictl info 2>/dev/null \
             | grep -F '"Name": "multus-cni-network"' > /dev/null; then
             return 0
@@ -148,6 +150,9 @@ wait_for_multus_runtime() {
         sleep 1
     done
     echo "The node runtime did not load the Multus CNI configuration" >&2
+    kubectl -n kube-system get pods -l name=multus -o wide >&2 || true
+    kubectl -n kube-system logs -l name=multus --all-containers=true --prefix --tail=100 >&2 || true
+    docker exec "${NODE_NAME}" ls -la /etc/cni/net.d >&2 || true
     docker exec "${NODE_NAME}" crictl info >&2 || true
     return 1
 }
@@ -183,15 +188,19 @@ cmd_up() {
     log "Installing CNI plugins ${CNI_PLUGINS_VERSION} on ${NODE_NAME}"
     local tmp
     tmp=$(mktemp -d)
-    curl -fsSL "https://github.com/containernetworking/plugins/releases/download/${CNI_PLUGINS_VERSION}/cni-plugins-linux-amd64-${CNI_PLUGINS_VERSION}.tgz" \
-        | tar -xz -C "${tmp}" ./macvlan ./static
+    curl -fsSLo "${tmp}/plugins.tgz" "https://github.com/containernetworking/plugins/releases/download/${CNI_PLUGINS_VERSION}/cni-plugins-linux-amd64-${CNI_PLUGINS_VERSION}.tgz"
+    curl -fsSLo "${tmp}/plugins.sha256" "https://github.com/containernetworking/plugins/releases/download/${CNI_PLUGINS_VERSION}/cni-plugins-linux-amd64-${CNI_PLUGINS_VERSION}.tgz.sha256"
+    printf '%s  %s\n' "$(awk '{print $1}' "${tmp}/plugins.sha256")" "${tmp}/plugins.tgz" | sha256sum --check -
+    tar -xzf "${tmp}/plugins.tgz" -C "${tmp}" ./macvlan ./static
     docker cp "${tmp}/macvlan" "${NODE_NAME}:/opt/cni/bin/macvlan"
     docker cp "${tmp}/static" "${NODE_NAME}:/opt/cni/bin/static"
     docker exec "${NODE_NAME}" chmod +x /opt/cni/bin/macvlan /opt/cni/bin/static
     rm -rf "${tmp}"
 
     log "Installing Multus ${MULTUS_VERSION}"
-    kubectl apply -f "https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/${MULTUS_VERSION}/deployments/multus-daemonset.yml"
+    curl -fsSL "https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/${MULTUS_VERSION}/deployments/multus-daemonset.yml" \
+        | sed "s|ghcr.io/k8snetworkplumbingwg/multus-cni:snapshot|ghcr.io/k8snetworkplumbingwg/multus-cni:${MULTUS_VERSION}|g" \
+        | kubectl apply -f -
     kubectl -n kube-system rollout status daemonset/kube-multus-ds --timeout=300s
     wait_for_multus_runtime
 }
@@ -465,10 +474,19 @@ cmd_logs() {
     kubectl -n "${NAMESPACE}" get all -o wide > "${ARTIFACT_DIR}/resources.txt" 2>&1 || true
     kubectl -n "${NAMESPACE}" describe pods > "${ARTIFACT_DIR}/describe-pods.txt" 2>&1 || true
     kubectl -n "${NAMESPACE}" get events --sort-by=.lastTimestamp > "${ARTIFACT_DIR}/events.txt" 2>&1 || true
+    kubectl -n "${NAMESPACE}" get endpoints,endpointslices -o wide > "${ARTIFACT_DIR}/endpoints.txt" 2>&1 || true
+    kubectl -n "${NAMESPACE}" exec "${RELEASE}-0" -- \
+        getent ahosts "${RELEASE}-stork-server.${NAMESPACE}.svc.cluster.local" > "${ARTIFACT_DIR}/stork-dns.txt" 2>&1 || true
+    kubectl -n kube-system get pods -o wide > "${ARTIFACT_DIR}/system-pods.txt" 2>&1 || true
+    kubectl -n kube-system describe pods -l name=multus > "${ARTIFACT_DIR}/multus-pods.txt" 2>&1 || true
+    docker exec "${NODE_NAME}" ls -la /etc/cni/net.d > "${ARTIFACT_DIR}/cni-files.txt" 2>&1 || true
+    docker exec "${NODE_NAME}" crictl info > "${ARTIFACT_DIR}/runtime-info.txt" 2>&1 || true
     kubectl -n "${NAMESPACE}" logs "${RELEASE}-0" --all-containers=true --tail=-1 > "${ARTIFACT_DIR}/domain-controller.log" 2>&1 || true
     kubectl -n "${NAMESPACE}" logs "deployment/${RELEASE}-stork-server" --tail=-1 > "${ARTIFACT_DIR}/stork-server.log" 2>&1 || true
     kubectl -n "${NAMESPACE}" logs "job/${RELEASE}-test-runner" --tail=-1 > "${ARTIFACT_DIR}/test-runner.log" 2>&1 || true
     kubectl -n kube-system logs daemonset/kube-multus-ds --tail=-1 > "${ARTIFACT_DIR}/multus.log" 2>&1 || true
+    kubectl -n kube-system logs -l k8s-app=kube-dns --all-containers=true --prefix --tail=100 > "${ARTIFACT_DIR}/cluster-dns.log" 2>&1 || true
+    kubectl -n kube-system logs -l k8s-app=kube-proxy --all-containers=true --prefix --tail=100 > "${ARTIFACT_DIR}/kube-proxy.log" 2>&1 || true
     log "Diagnostics written to ${ARTIFACT_DIR}"
 }
 

@@ -3,10 +3,12 @@ package network
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,12 +71,104 @@ func TestLDAPTLSConfigLoadsCustomCA(t *testing.T) {
 	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
 	config, err := ldapTLSConfig("192.0.2.1", caPath, false)
 	if err != nil {
 		t.Fatalf("ldapTLSConfig() error = %v", err)
 	}
 	if config.InsecureSkipVerify || config.RootCAs == nil || config.ServerName != "192.0.2.1" {
 		t.Fatalf("LDAP TLS config = %+v, want custom roots and verified server name", config)
+	}
+}
+
+func TestLDAPConnectUsesCustomPortAndVerifiesTLS(t *testing.T) {
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	certificate := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "LDAP test server"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:             now.Add(-time.Minute),
+		NotAfter:              now.Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, publicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPath := filepath.Join(t.TempDir(), "ca.crt")
+	if err := os.WriteFile(caPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name    string
+		useTLS  bool
+		caPath  string
+		wantErr bool
+	}{
+		{name: "plaintext"},
+		{name: "trusted TLS", useTLS: true, caPath: caPath},
+		{name: "untrusted TLS", useTLS: true, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("DIB_LDAP_CA_CERTIFICATE", test.caPath)
+			t.Setenv("DIB_ALLOW_INSECURE_TEST_LDAP_TLS", "false")
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			serverDone := make(chan error, 1)
+			go func() {
+				conn, err := listener.Accept()
+				if err != nil {
+					serverDone <- err
+					return
+				}
+				defer conn.Close()
+				if test.useTLS {
+					if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+						serverDone <- err
+						return
+					}
+					server := tls.Server(conn, &tls.Config{
+						MinVersion: tls.VersionTLS12,
+						Certificates: []tls.Certificate{{
+							Certificate: [][]byte{der},
+							PrivateKey:  privateKey,
+						}},
+					})
+					serverDone <- server.Handshake()
+					return
+				}
+				serverDone <- nil
+			}()
+			host, port, err := net.SplitHostPort(listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := &LDAPClient{Server: host, Port: port, UseTLS: test.useTLS}
+			conn, err := client.Connect()
+			if (err != nil) != test.wantErr {
+				t.Fatalf("Connect() error = %v, want error = %v", err, test.wantErr)
+			}
+			if conn != nil {
+				conn.Close()
+			}
+			select {
+			case err := <-serverDone:
+				if err != nil && !test.wantErr {
+					t.Fatalf("server handshake: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("LDAP server did not complete the connection")
+			}
+		})
 	}
 }

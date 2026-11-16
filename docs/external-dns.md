@@ -64,7 +64,7 @@ procedure and currently requires a bridge rollout.
 The bridge image is independently packaged:
 
 ```bash
-docker pull ghcr.io/gmouzourou/domain-in-a-box-external-dns-bridge:0.6.0
+docker pull ghcr.io/gmouzourou/domain-in-a-box-external-dns-bridge:0.6.1
 ```
 
 Prepare a protected password file and a bridge JSON configuration containing

@@ -2,8 +2,8 @@ apiVersion: v2
 name: domain-in-a-box
 description: A Helm chart for Domain-In-A-Box (Active Directory DC, BIND9, Kea DHCP, Chrony, Stork)
 type: application
-version: 0.6.0
-appVersion: "0.6.0"
+version: 0.6.1
+appVersion: "0.6.1"
 keywords:
   - active-directory
   - dns

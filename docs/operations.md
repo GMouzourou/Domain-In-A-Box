@@ -120,6 +120,23 @@ In a multi-controller deployment, upgrade one controller at a time, starting
 with the secondary, and wait for replication and SYSVOL synchronization to be
 healthy before upgrading the other.
 
+### PostgreSQL dependency updates
+
+The bundled database uses PostgreSQL 18 with a digest-pinned Alpine image.
+Back up Stork's database before changing even a patch image or digest, and
+check Stork login, agent registration and retained monitoring data afterward.
+The refreshed image was checked with existing PostgreSQL 18 data and a logical
+backup/restore; this does not certify a future major-version migration.
+
+Changing the major image tag does not migrate an existing database. For a
+future major upgrade, first confirm that Stork supports the target version,
+stop Stork writes, and test PostgreSQL's supported upgrade or logical
+dump/restore procedure on disposable copies. Keep the original volume and a
+verified backup until the upgraded installation has passed its checks.
+Rollback must restore the pre-upgrade database with the compatible old
+Stork/PostgreSQL versions; do not mount upgraded database files with an older
+major server.
+
 ### Docker Compose changes in 0.6.0
 
 - The LAN addresses moved from `docker-compose.yml` to `.env`

@@ -19,7 +19,7 @@ trust:
   caKey: ca.crt
 bridgeImage:
   repository: ghcr.io/gmouzourou/domain-in-a-box-external-dns-bridge
-  tag: "0.6.0"
+  tag: "0.6.1"
   pullPolicy: IfNotPresent
 externalDNSImage:
   repository: registry.k8s.io/external-dns/external-dns
