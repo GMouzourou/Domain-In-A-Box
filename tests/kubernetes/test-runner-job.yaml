@@ -18,6 +18,8 @@ spec:
         k8s.v1.cni.cncf.io/networks: '[{ "name": "dib-macvlan-client", "interface": "net1" }]'
     spec:
       restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: "__NODE_NAME__"
       hostname: domain-client
       containers:
         - name: test-runner
@@ -31,10 +33,17 @@ spec:
             - name: ldap-ca
               mountPath: /etc/dib-trust/ldap
               readOnly: true
-          args: ["/usr/local/bin/test-runner", "run", "all"]
+          args:
+            - bash
+            - -ec
+            - |
+              /usr/local/bin/test-runner run all
+              bash /usr/local/bin/ldap-gssapi-test.sh
           env:
             - name: DIB_LDAP_CA_CERTIFICATE
               value: "/etc/dib-trust/ldap/ca.crt"
+            - name: LDAP_TEST_HOST
+              value: "__RELEASE__-0.domain.home.arpa"
             - name: DOMAIN_CONTROLLER_IP
               value: "192.168.3.1"
             - name: STORK_SERVER_IP
@@ -61,8 +70,8 @@ spec:
               value: "192.168.3.254"
             - name: DIB_DHCP_POOL
               value: "192.168.3.100-192.168.3.199"
-            # Unlike the compose suite, the macvlan segment carries broadcast
-            # traffic, so a real lease can be requested and asserted.
+            # The macvlan segment carries broadcast traffic, so a real lease
+            # can be requested and asserted.
             - name: ENABLE_DHCP_CLIENT
               value: "true"
             - name: DIB_INTERFACE

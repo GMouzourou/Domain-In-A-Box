@@ -11,13 +11,13 @@ External PostgreSQL password Secret: {{ .Values.database.external.passwordSecret
 {{- end }}
 
 1. Active Directory Domain: {{ .Values.domain.realm }}
-   Domain Name (NetBIOS):   {{ .Values.domain.name }}
+   Domain Name (NetBIOS):   {{ include "domain-in-a-box.netbiosName" . }}
    DHCP Pool:               {{ .Values.domain.dhcpPool }}
    DNS Forwarders:          {{ .Values.domain.dnsForwarders }}
 
 2. Network & Connectivity:
    {{- if .Values.multus.enabled }}
-   Macvlan Interface: {{ .Values.multus.networkName }}
+   Macvlan Interface: {{ include "domain-in-a-box.networkName" . }}
    Static IP:         {{ .Values.multus.address }}
    Gateway:           {{ .Values.multus.gateway }}
    {{- else }}

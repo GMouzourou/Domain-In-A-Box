@@ -105,7 +105,7 @@ func readSYSVOLGPOVersions(root string) (map[string]int, error) {
 		if !gpoGUIDPattern.MatchString(guid) {
 			return nil
 		}
-		file, err := os.Open(path)
+		file, err := os.Open(path) //nolint:gosec // G122: read-only version check; SYSVOL writers are domain administrators.
 		if err != nil {
 			return fmt.Errorf("open %s: %w", path, err)
 		}

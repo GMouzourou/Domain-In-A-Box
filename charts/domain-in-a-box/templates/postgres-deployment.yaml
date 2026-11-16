@@ -1,4 +1,4 @@
-{{- if and .Values.storkServer.enabled (not .Values.database.external.enabled) }}
+{{- if and (include "domain-in-a-box.storkServerEnabled" .) (not .Values.database.external.enabled) }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -35,6 +35,10 @@ spec:
         {{- include "domain-in-a-box.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: postgresql
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgresql
           image: {{ .Values.database.internal.image | quote }}

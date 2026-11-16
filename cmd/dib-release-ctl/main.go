@@ -19,6 +19,10 @@ type versionField struct {
 }
 
 var versionFields = []versionField{
+	{"charts/domain-in-a-box-external-dns-bridge/Chart.yaml", regexp.MustCompile(`(?m)^version: [^\n]+$`), func(v string) string { return "version: " + v }},
+	{"charts/domain-in-a-box-external-dns-bridge/Chart.yaml", regexp.MustCompile(`(?m)^appVersion: [^\n]+$`), func(v string) string { return `appVersion: "` + v + `"` }},
+	{"charts/domain-in-a-box-external-dns-bridge/values.yaml", regexp.MustCompile(`(?m)(^bridgeImage:\n(?:[ \t]+[^\n]*\n)*?[ \t]+tag: )[^\n]+`), func(v string) string { return `"` + v + `"` }},
+	{"docs/external-dns.md", regexp.MustCompile(`ghcr\.io/gmouzourou/domain-in-a-box-external-dns-bridge:[A-Za-z0-9_.-]+`), func(v string) string { return "ghcr.io/gmouzourou/domain-in-a-box-external-dns-bridge:" + v }},
 	{"charts/domain-in-a-box/Chart.yaml", regexp.MustCompile(`(?m)^version: [^\n]+$`), func(v string) string { return "version: " + v }},
 	{"charts/domain-in-a-box/Chart.yaml", regexp.MustCompile(`(?m)^appVersion: [^\n]+$`), func(v string) string { return `appVersion: "` + v + `"` }},
 	{"charts/domain-in-a-box/values.yaml", regexp.MustCompile(`(?m)(^coreImage:\n(?:[ \t]+[^\n]*\n)*?[ \t]+tag: )[^\n]+`), func(v string) string { return `"` + v + `"` }},
@@ -27,6 +31,12 @@ var versionFields = []versionField{
 	{"docker-compose.yml", regexp.MustCompile(`ghcr\.io/gmouzourou/domain-in-a-box-stork:[A-Za-z0-9_.-]+`), func(v string) string { return "ghcr.io/gmouzourou/domain-in-a-box-stork:" + v }},
 	{"docs/docker.md", regexp.MustCompile(`ghcr\.io/gmouzourou/domain-in-a-box:[A-Za-z0-9_.-]+`), func(v string) string { return "ghcr.io/gmouzourou/domain-in-a-box:" + v }},
 }
+
+// releaseImagePattern finds published image references anywhere in the
+// repository, so a new document or manifest cannot pin a stale release.
+var releaseImagePattern = regexp.MustCompile(`(ghcr\.io/gmouzourou/domain-in-a-box(?:-stork|-external-dns-bridge)?:)v?[0-9]+\.[0-9]+\.[0-9]+\b`)
+
+var scannedExtensions = map[string]bool{".md": true, ".yml": true, ".yaml": true, ".hcl": true, ".sh": true, ".json": true, ".tpl": true, ".txt": true}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -120,6 +130,43 @@ func synchronize(root, version, tag string, update bool) error {
 		next = append(next, replacement...)
 		next = append(next, content[end:]...)
 		updated[field.path] = next
+	}
+
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if path != root && (strings.HasPrefix(entry.Name(), ".") && entry.Name() != ".github" || entry.Name() == "node_modules") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !entry.Type().IsRegular() || !scannedExtensions[filepath.Ext(path)] && entry.Name() != "Dockerfile" {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		content, loaded := updated[relative]
+		if !loaded {
+			content, err = os.ReadFile(path) //nolint:gosec // G122: a developer tool reading its own checkout.
+			if err != nil {
+				return fmt.Errorf("read %s: %w", relative, err)
+			}
+		}
+		next := releaseImagePattern.ReplaceAll(content, []byte("${1}"+version))
+		if !bytes.Equal(next, content) {
+			if !loaded {
+				original[relative] = content
+			}
+			updated[relative] = next
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("scan release image references: %w", err)
 	}
 
 	var mismatches []error

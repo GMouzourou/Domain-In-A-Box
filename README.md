@@ -39,7 +39,8 @@ Server licence is required.
 | --- | --- |
 | **Active Directory** | Samba AD DC: users, groups and computers, Kerberos, LDAP and LDAPS, SYSVOL and NETLOGON shares, Group Policy |
 | **DNS** | AD-integrated DNS zones, with BIND9 forwarding other names to the upstream resolvers you choose |
-| **DHCP** | Kea DHCPv4 with dynamic DNS: clients register in AD DNS using secure (GSS-TSIG) updates |
+| **Application DNS** *(opt-in)* | [ExternalDNS bridge](docs/external-dns.md): new Kubernetes Ingress names register under your domain, with dedicated credentials and ownership-safe updates |
+| **DHCP** | Kea DHCPv4 with dynamic DNS: client names are registered in AD DNS using secure (GSS-TSIG) updates, without overwriting records you created |
 | **Time** | Chrony NTP server for domain members |
 | **Monitoring** | ISC Stork web dashboard for DHCP and DNS, signed in with your domain accounts, plus Prometheus metrics for Samba, BIND and Kea |
 | **Deployment** | Docker Compose, Docker CLI or a Helm chart; `linux/amd64` images on GitHub Container Registry |
@@ -138,7 +139,7 @@ Full details, including every consequence and accepted risk, are in
 
 | Event | Docker and Kubernetes | Multi-controller Kubernetes |
 | --- | --- | --- |
-| **A service process crashes** | Restarted automatically inside the controller. Repeated failures need a manual restart for now ([#48](https://github.com/GMouzourou/Domain-In-A-Box/issues/48)). | Same, and the other controller keeps serving. |
+| **A service process crashes** | Restarted automatically inside the controller. If a core service keeps failing, the controller container restarts itself. | Same, and the other controller keeps serving. |
 | **Controller restart or upgrade** | Brief outage until the controller is ready again. | No interruption to sign-in or DNS; Group Policy edits and DHCP pause only while the primary restarts. |
 | **Host reboot** | Outage until the host and controller are back. | The other controller keeps serving. In testing, the rebooted controller was back within about 4.5 minutes. |
 | **Host permanently lost** | Domain unavailable. Rebuild from a backup ([#41](https://github.com/GMouzourou/Domain-In-A-Box/issues/41)). On Kubernetes with replicated storage, the controller can restart on another node ([#39](https://github.com/GMouzourou/Domain-In-A-Box/issues/39)). | The survivor keeps serving. Remove the lost controller and join a new one. If the primary is lost, Group Policy cannot be edited until promotion is supported ([#40](https://github.com/GMouzourou/Domain-In-A-Box/issues/40)). |
@@ -156,13 +157,13 @@ cd Domain-In-A-Box
 cp .env.example .env
 ```
 
-1. Edit `.env`: set your domain name, three unique passwords, your host's LAN
-   interface and a free DHCP range.
-2. Edit the addresses in `docker-compose.yml` to match your LAN.
-3. Create certificates in `./certs`, as described in
+1. Edit `.env`: set your domain name, the domain Administrator password, your
+   host's LAN interface, the LAN addresses and a free DHCP range. The other
+   service passwords are generated on first start.
+2. Create certificates in `./certs`, as described in
    [Certificates](docs/certificates.md).
-4. Disable any other DHCP server on the LAN, or set `DIB_DHCP_ENABLED=false`.
-5. Start the stack:
+3. Disable any other DHCP server on the LAN, or set `DIB_DHCP_ENABLED=false`.
+4. Start the stack:
 
    ```bash
    docker compose up -d

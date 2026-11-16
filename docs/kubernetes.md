@@ -102,6 +102,13 @@ The Stork agent in the controller pod registers through a headless Service on
 port `8081`, using its stable in-cluster DNS name. No LAN address is needed
 for the Stork server.
 
+Stork's LDAP connection uses the controller's internal Service. A supervised
+LDAPS relay listens only on the pod IP's port 636 and forwards encrypted bytes
+to Samba on loopback. It does not terminate TLS or change Samba's LAN bindings,
+AD identity or DNS registrations. Certificates must still cover the Service
+name used by Stork. The relay is unnecessary when Samba already binds the
+primary pod interface; it is disabled outside Kubernetes by default.
+
 ## External PostgreSQL
 
 To use an existing PostgreSQL server instead of the bundled one:
@@ -137,10 +144,86 @@ certificate authentication, set `tls.clientCertSecretName`. The `disable` and
 | Headless Service `<fullname>-stork-agent` | Stork agent callback on port `8081` |
 | Deployment and Service `<fullname>-stork-server` | Stork UI and API |
 | PostgreSQL StatefulSet and Service `<fullname>-postgresql` | Bundled Stork database (unless `database.external.enabled`) |
+| Optional NetworkPolicy `<fullname>` | Release-scoped primary pod-network ingress and egress |
 
 Do not scale the StatefulSet above one replica. A second controller is a
 separate release with its own identity. See
 [Multi-controller Kubernetes](multi-controller.md).
+
+## Container security
+
+The controller defaults to `security.privileged: false`, drops all capabilities,
+then grants the explicit profile in the
+[StatefulSet template](../charts/domain-in-a-box/templates/statefulset.yaml).
+It uses RuntimeDefault seccomp and does not mount a service-account token.
+The controller still runs as root with a writable filesystem.
+
+`SYS_ADMIN` is required for Samba SYSVOL ACL provisioning. It remains broad;
+this profile is not a restricted/non-root security boundary or a claim that
+every capability is mathematically minimal. Kea needs `NET_ADMIN`/`NET_RAW`,
+and the Stork agent needs `DAC_READ_SEARCH`/`SYS_PTRACE` executable file
+capabilities after switching Unix users, so the controller intentionally permits
+privilege escalation. Chrony runs with `-x`, without `SYS_TIME` or host-clock changes.
+
+The Stork server also remains root: startup installs CA trust, repairs file
+ownership and writes configuration. It drops all capabilities except
+`CHOWN`, `DAC_OVERRIDE`, `FOWNER` and `NET_BIND_SERVICE`, disallows escalation
+and uses RuntimeDefault seccomp. Stork and bundled PostgreSQL do not mount
+service-account tokens. PostgreSQL otherwise retains its existing filesystem/user behavior.
+
+Set `security.privileged: true` only for a deliberately reviewed compatibility
+exception. That controller also omits the normal seccomp profile to preserve
+legacy privileged behavior. Pod Security Admission's restricted policy is not
+compatible with the controller or Stork; do not exempt unrelated workloads.
+
+## Optional NetworkPolicy
+
+`networkPolicy.enabled: true` selects this release's pods. Both ingress and
+egress are restricted on the primary pod network. Built-in rules allow DIB-name
+pods in the same namespace to communicate on TCP 636 (LDAPS), 8081 (agent
+callback), 443/80 (Stork) and 5432 (bundled PostgreSQL). DNS TCP/UDP 53 and NTP
+UDP 123 egress are allowed to any destination.
+
+Add rules for your actual clients, monitoring, ingress controller and external
+database before enabling the policy. For example, adapt these namespaces and
+pod labels to your deployment:
+
+```yaml
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - {protocol: TCP, port: 9922}
+        - {protocol: TCP, port: 9119}
+        - {protocol: TCP, port: 9547}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: postgres
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+      ports:
+        - {protocol: TCP, port: 5432}
+```
+
+This example does not allow Stork UI ingress or pod-network AD clients; add
+their selected sources and required ports separately. Other policies selecting
+the same pods can add allowances because Kubernetes NetworkPolicies are additive.
+Verify actual allowed and denied connections with an enforcing CNI. Default
+kind networking alone does not enforce policies.
+
+**Multus/macvlan LAN traffic is outside this policy's protection.** Protect that
+network through LAN segmentation/firewalls and service authentication. Enabling
+this policy is not a DHCP, Kerberos, SMB or replication firewall on the LAN.
 
 ## Behaviour and limits
 
@@ -156,7 +239,11 @@ separate release with its own identity. See
 - **Readiness** checks the core bootstrap marker and the LDAP, Kerberos and
   BIND listeners. It does not prove that DHCP leases, DDNS updates or client
   logins work.
-- The container runs privileged. Check that this fits your cluster's
-  security policy.
+- **Liveness** checks the same listeners, after the startup probe, and
+  restarts the pod only after about three minutes of failure. A crash-looping
+  core process restarts the pod sooner; see
+  [Automatic recovery](operations.md#automatic-recovery).
+- The root controller retains broad required capabilities. Check that the
+  [security profile](#container-security) fits your cluster's security policy.
 
 For upgrades, certificate rotation and backups, see [Operations](operations.md).

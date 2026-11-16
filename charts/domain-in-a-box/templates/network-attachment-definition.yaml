@@ -2,14 +2,14 @@
 apiVersion: k8s.cni.cncf.io/v1
 kind: NetworkAttachmentDefinition
 metadata:
-  name: {{ .Values.multus.networkName }}
+  name: {{ include "domain-in-a-box.networkName" . }}
   labels:
     {{- include "domain-in-a-box.labels" . | nindent 4 }}
 spec:
   config: |-
     {
       "cniVersion": "0.4.0",
-      "name": "{{ .Values.multus.networkName }}",
+      "name": "{{ include "domain-in-a-box.networkName" . }}",
       "type": "macvlan",
       "master": "{{ .Values.multus.masterInterface }}",
       "mode": "bridge",

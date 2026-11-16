@@ -7,10 +7,10 @@ before starting work.
 
 | Path | Contents |
 | --- | --- |
-| `Dockerfile` | Multi-stage build for the controller (`core`) and Stork (`stork`) images. |
-| `entrypoint.sh` | Controller start-up: interface discovery, provisioning or joining, and identity checks. |
-| `cmd/`, `internal/` | Go service supervisors and control tools such as `dib-network-core-ctl`. |
+| `Dockerfile`, `docker-bake.hcl` | Shared image graph: controller, Stork, optional ExternalDNS bridge and test client. |
+| `cmd/`, `internal/` | Go service supervisors and control tools. `dib-bootstrap-ctl start` is the controller entrypoint: interface discovery, provisioning or joining, and identity checks. |
 | `charts/domain-in-a-box/` | Helm chart. |
+| `charts/domain-in-a-box-external-dns-bridge/` | Separate opt-in application DNS chart. |
 | `docker-compose.yml`, `.env.example` | Docker Compose deployment. |
 | `tests/` | Integration test runner, Linux test client and Kubernetes test environment. |
 | `docs/` | This manual. |
@@ -20,6 +20,7 @@ before starting work.
 ```bash
 make build         # controller image
 make build-stork   # Stork image
+make build-bridge  # optional bridge; no native controller compilation
 make help          # all targets
 ```
 
@@ -28,11 +29,27 @@ Local Make builds default to the development tag `latest`; override it with
 source. Production Compose/Helm defaults use pinned release tags, and the test
 stack uses its separate `:ci` tags.
 
+Make and CI use the same explicit Bake file; include `-f docker-bake.hcl` in
+direct Bake commands so it does not also read the deployment Compose file.
+Kea uses Ubuntu's `kea-dhcp4-server` and `kea-common` packages, including its
+HA and lease-command hooks. DHCP DNS updates use `nsupdate -g`, so the
+source-built Kea GSS-TSIG hook is no longer needed. The Samba metrics endpoint
+still has a cached native stage because Ubuntu does not package it.
+Package installation is cached before application copies, and the bridge compiles only its Go tool.
+Set `NATIVE_BUILD_JOBS` to limit native compilation on a shared development host.
+
+CI builds named OCI archives once, with SBOM and provenance, and uses distinct
+GitHub Actions cache scopes for each image. Test jobs enable Docker's containerd
+image store and load the original index using `.github/scripts/oci_archive.py`; converting
+through a Docker-daemon export can change configuration identity and is not used.
+Publishing copies the tested archives with all manifests and preserved digests,
+then verifies each destination index. It does not rebuild the product.
+
 ## Testing
 
 | Command | What it does |
 | --- | --- |
-| `make test-unit` | Go unit tests for the test runner. |
+| `make test-unit` | Go unit tests for the product and the test runner. |
 | `make test-all` | Builds the images and runs the Docker integration suite: health, DNS, DHCP, AD, and a Linux client domain join. |
 | `make test-dns`, `make test-dhcp`, `make test-ad`, `make test-ad-linux` | Individual suites against a running test stack. |
 | `make k8s-all` | Creates a kind cluster with Multus and macvlan, deploys the chart and runs the suite inside the cluster. |
@@ -45,8 +62,18 @@ environment variables and debugging tips.
 ## Linting
 
 ```bash
-make lint   # shellcheck, hadolint, Compose validation and Helm chart checks
+make lint   # release pins, Go, shell, Dockerfiles, Compose, Helm charts and Markdown links
 ```
+
+`make lint` needs `golangci-lint` (v2.15.0, the version CI uses), `shellcheck`,
+`helm`, `lychee` and Docker; hadolint runs from a pinned container image. Each
+check fails if its tool is missing, and CI calls the same Make targets.
+
+Go code is checked with the repository's [`.golangci.yml`](../.golangci.yml),
+which also enforces `gofmt`. Suppress a finding only with an inline
+`//nolint:<linter> // reason` comment that explains why the code is safe.
+
+Markdown link checking uses `lychee` in offline mode, including local anchors.
 
 `make helm-lint` also runs `tests/kubernetes/helm-chart-test.sh`, which
 checks the chart's validation rules and rendered output. Add a case there when
@@ -58,10 +85,39 @@ you change chart behaviour.
 requests and pushes. It runs:
 
 - a Trivy security scan;
-- Go formatting, shellcheck, hadolint, and Compose and Helm validation;
+- Go linting and formatting, Markdown link checks, shellcheck, hadolint, and Compose and
+  Helm validation;
 - Go tests and builds;
 - image builds and the Docker integration suite;
-- the kind-based Kubernetes suite.
+- the kind-based Kubernetes suite;
+- disposable two-controller acceptance using the official ExternalDNS image,
+  including native DNS authorization refusals, verified LDAPS, record lifecycle,
+  controller failover and pod-local credential/network boundaries.
+
+The bridge acceptance harness does not contact an existing domain or Kubernetes
+cluster. It creates its own internal Docker network and kind cluster, uses a
+short-lived test CA and disposable accounts, and removes its controllers, cluster,
+network and private test material even on failure. It refuses overlapping host
+routes, existing task resource names and nonempty work directories. Diagnostic
+logs contain only the disposable domain.
+
+With the local core and bridge images already built, run it using installed
+`kind`, `kubectl`, `helm`, `openssl` and Docker:
+
+```bash
+workdir="$(mktemp -d)"
+CGO_ENABLED=0 go test -c ./internal/services/dnsbridge -o "$workdir/backend-test"
+python3 tests/dnsbridge/integration.py \
+  --core-image gmouzourou/domain-in-a-box:latest \
+  --bridge-image ghcr.io/gmouzourou/domain-in-a-box-external-dns-bridge:latest \
+  --backend-test-binary "$workdir/backend-test" \
+  --work-dir "$workdir/acceptance" \
+  --name dib-bridge-development
+```
+
+Override image tags and tool paths using the harness flags when necessary. Do
+not run the Docker integration Compose file unchanged on a host whose LAN uses
+its test subnet; use the isolated bridge acceptance instead.
 
 Images are published to `ghcr.io/gmouzourou/` (and to Docker Hub when its
 credentials are configured) only from `main` and `v*` release tags.
@@ -70,7 +126,8 @@ credentials are configured) only from `main` and `v*` release tags.
 
 [`VERSION`](../VERSION) is the single project release version, without the
 `v` prefix. Chart version, chart `appVersion`, default controller/Stork image
-tags, Compose images and the Docker CLI example must agree with it.
+tags, Compose images, the bridge chart/image and the manual's image examples must
+agree with it.
 Third-party dependency versions are independent and are not changed by the
 release updater.
 
@@ -95,13 +152,17 @@ For a stable release (replace `X.Y.Z` with the new version):
    git push origin vX.Y.Z
    ```
 
-4. Wait for the tag workflow to pass and publish both versioned images. Then
+4. Wait for the tag workflow to pass and publish the three versioned images. Then
    create the GitHub release for that tag, with notes describing changes and
    any migration steps.
 
 `make version-check` is also part of `make lint` and CI. On a tag build it
 requires `GITHUB_REF_NAME` to be exactly `v` plus `VERSION`. To check a tag
 locally, run `go run ./cmd/dib-release-ctl check --tag vX.Y.Z`.
+Besides the chart, Compose and documentation fields it owns, the check scans
+every Markdown, YAML, HCL, JSON, template, shell and Dockerfile in the
+repository for `ghcr.io/gmouzourou/domain-in-a-box*:X.Y.Z` references, so a new
+document cannot pin a stale release; `make release-version` rewrites them too.
 Publishing depends on the version-checking lint job, so mismatched versions
 cannot be published even if the integration suites pass.
 

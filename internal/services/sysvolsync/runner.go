@@ -219,11 +219,11 @@ func (r *Runner) runOnce(ctx context.Context, cfg config) error {
 	if err != nil {
 		return fmt.Errorf("open SYSVOL synchronization lock: %w", err)
 	}
+	// Closing the descriptor releases the lock.
 	defer lock.Close()
 	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		return fmt.Errorf("another SYSVOL synchronization operation is active: %w", err)
 	}
-	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
 
 	if cfg.role == roleWriter {
 		return r.exportOnce(ctx, cfg)
@@ -382,7 +382,8 @@ func (r *Runner) pullOnce(ctx context.Context, cfg config) error {
 	}
 
 	if state.Current != nil && reflect.DeepEqual(activeEntries, manifest.Entries) {
-		if err := runSambaTool(ctx, "ntacl", "sysvolcheck"); err == nil {
+		aclErr := runSambaTool(ctx, "ntacl", "sysvolcheck")
+		if aclErr == nil {
 			state.Current = &manifest
 			if err := writeSyncState(sysvolSyncStatePath, state); err != nil {
 				return err
@@ -392,9 +393,8 @@ func (r *Runner) pullOnce(ctx context.Context, cfg config) error {
 			}
 			r.log.Infof("verified SYSVOL is current; no directory publish required")
 			return nil
-		} else {
-			r.log.Warnf("active SYSVOL ACL check failed; rebuilding the staged tree: %v", err)
 		}
+		r.log.Warnf("active SYSVOL ACL check failed; rebuilding the staged tree: %v", aclErr)
 	}
 
 	configPath, err := writeStagedSambaConfig(sysvolSyncStagePath, cfg.dnsDomain)
@@ -473,7 +473,7 @@ func normalizeExportPermissions(root string) error {
 		} else if !info.Mode().IsRegular() {
 			return fmt.Errorf("SYSVOL export contains unsupported file type %q", path)
 		}
-		if err := os.Chmod(path, mode); err != nil {
+		if err := os.Chmod(path, mode); err != nil { //nolint:gosec // G122: private staging tree; symlinks are rejected above.
 			return fmt.Errorf("set SYSVOL export permissions on %s: %w", path, err)
 		}
 		return nil
@@ -500,7 +500,7 @@ func syncTree(root string) error {
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("staged SYSVOL contains unsupported file type %q", path)
 		}
-		file, err := os.Open(path)
+		file, err := os.Open(path) //nolint:gosec // G122: private staging tree; symlinks are rejected above.
 		if err != nil {
 			return fmt.Errorf("open staged SYSVOL file %s for sync: %w", path, err)
 		}

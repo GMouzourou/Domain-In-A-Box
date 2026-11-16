@@ -1,20 +1,37 @@
-{{- $ldapCASecret := default .Values.tls.controller.secretName .Values.tls.ldap.caSecretName -}}
+{{- $isPrimary := eq .Values.domain.controllerMode "primary" -}}
+{{- $controllerTLSSecret := include "domain-in-a-box.controllerTLSSecret" . -}}
+{{- $ldapCASecret := default $controllerTLSSecret .Values.tls.ldap.caSecretName -}}
 {{- $clusterDomain := default "cluster.local" .Values.clusterDNS.domain -}}
-{{- $storkServerHost := default (printf "%s-stork-server.%s.svc.%s" (include "domain-in-a-box.fullname" .) .Release.Namespace $clusterDomain) .Values.storkServer.host -}}
+{{- $storkServerHost := include "domain-in-a-box.storkServerHost" . -}}
+{{- $storkServerTLSSecret := include "domain-in-a-box.storkServerTLSSecret" . -}}
+{{- $dhcpEnabled := eq (include "domain-in-a-box.dhcpEnabled" .) "true" -}}
+{{- $storkServerEnabled := eq (include "domain-in-a-box.storkServerEnabled" .) "true" -}}
 {{- $localLANAddress := first (splitList "/" .Values.multus.address) -}}
+{{- $peerAddress := .Values.peer.address -}}
+{{- $joinServer := default $peerAddress .Values.domain.joinServer -}}
+{{- $sysvolPeerAddress := default $peerAddress .Values.sysvolSync.peerAddress -}}
+{{- $sysvolWriterAddress := default $peerAddress .Values.sysvolSync.writerAddress -}}
+{{- $haPrimaryAddress := default (ternary $localLANAddress $peerAddress $isPrimary) .Values.dhcpHA.primaryAddress -}}
+{{- $haStandbyAddress := default (ternary $peerAddress $localLANAddress $isPrimary) .Values.dhcpHA.standbyAddress -}}
+{{- if and $peerAddress (not (regexMatch `^[0-9]{1,3}(\.[0-9]{1,3}){3}$` $peerAddress)) -}}
+{{- fail "peer.address must be an IPv4 address" -}}
+{{- end -}}
+{{- if and $peerAddress (eq $peerAddress $localLANAddress) -}}
+{{- fail "peer.address must be the other controller's address, not multus.address" -}}
+{{- end -}}
 {{- if not (has .Values.domain.controllerMode (list "primary" "secondary")) -}}
 {{- fail "domain.controllerMode must be primary or secondary" -}}
 {{- end -}}
-{{- if and (eq .Values.domain.controllerMode "secondary") (not .Values.domain.joinServer) -}}
-{{- fail "domain.joinServer is required for a secondary controller" -}}
+{{- if and (eq .Values.domain.controllerMode "secondary") (not $joinServer) -}}
+{{- fail "peer.address (or domain.joinServer) is required for a secondary controller" -}}
 {{- end -}}
-{{- if and (eq .Values.domain.controllerMode "secondary") .Values.domain.dhcpEnabled -}}
+{{- if and (eq .Values.domain.controllerMode "secondary") $dhcpEnabled -}}
 {{- fail "domain.dhcpEnabled must be false for a secondary controller until DHCP HA is configured" -}}
 {{- end -}}
-{{- if and .Values.dhcpHA.enabled (eq .Values.domain.controllerMode "primary") (not .Values.domain.dhcpEnabled) -}}
+{{- if and .Values.dhcpHA.enabled (eq .Values.domain.controllerMode "primary") (not $dhcpEnabled) -}}
 {{- fail "domain.dhcpEnabled must be true for the primary when DHCP HA is enabled" -}}
 {{- end -}}
-{{- if and .Values.dhcpHA.enabled (eq .Values.domain.controllerMode "secondary") .Values.domain.dhcpEnabled -}}
+{{- if and .Values.dhcpHA.enabled (eq .Values.domain.controllerMode "secondary") $dhcpEnabled -}}
 {{- fail "domain.dhcpEnabled must be false for the standby when DHCP HA is enabled" -}}
 {{- end -}}
 {{- if and .Values.dhcpHA.enabled (not .Values.sysvolSync.enabled) -}}
@@ -26,22 +43,25 @@
 {{- if and .Values.dhcpHA.enabled (not .Values.persistence.enabled) -}}
 {{- fail "persistence.enabled must be true when DHCP HA is enabled" -}}
 {{- end -}}
-{{- if and .Values.dhcpHA.enabled (not .Values.tls.controller.secretName) -}}
+{{- if and .Values.dhcpHA.enabled (not $controllerTLSSecret) -}}
 {{- fail "tls.controller.secretName is required for mutual TLS between DHCP HA peers" -}}
 {{- end -}}
-{{- if and .Values.dhcpHA.enabled (or (not (regexMatch `^[0-9]{1,3}(\.[0-9]{1,3}){3}$` .Values.dhcpHA.primaryAddress)) (not (regexMatch `^[0-9]{1,3}(\.[0-9]{1,3}){3}$` .Values.dhcpHA.standbyAddress))) -}}
-{{- fail "dhcpHA.primaryAddress and dhcpHA.standbyAddress must be IPv4 addresses" -}}
+{{- if and .Values.dhcpHA.enabled (or (not (regexMatch `^[0-9]{1,3}(\.[0-9]{1,3}){3}$` $haPrimaryAddress)) (not (regexMatch `^[0-9]{1,3}(\.[0-9]{1,3}){3}$` $haStandbyAddress))) -}}
+{{- fail "DHCP HA needs IPv4 addresses for both controllers; set peer.address and multus.address" -}}
 {{- end -}}
-{{- if and .Values.dhcpHA.enabled (eq .Values.dhcpHA.primaryAddress .Values.dhcpHA.standbyAddress) -}}
+{{- if and .Values.dhcpHA.enabled (eq $haPrimaryAddress $haStandbyAddress) -}}
 {{- fail "dhcpHA.primaryAddress and dhcpHA.standbyAddress must differ" -}}
+{{- end -}}
+{{- if and .Values.domain.dhcpDNSServers (not (regexMatch `^ *[0-9]{1,3}(\.[0-9]{1,3}){3}( *, *[0-9]{1,3}(\.[0-9]{1,3}){3})* *$` .Values.domain.dhcpDNSServers)) -}}
+{{- fail "domain.dhcpDNSServers must be a comma-separated list of IPv4 addresses" -}}
 {{- end -}}
 {{- if and .Values.dhcpHA.enabled (eq .Values.dhcpHA.primaryName .Values.dhcpHA.standbyName) -}}
 {{- fail "dhcpHA.primaryName and dhcpHA.standbyName must differ" -}}
 {{- end -}}
-{{- if and .Values.dhcpHA.enabled (eq .Values.domain.controllerMode "primary") (ne $localLANAddress .Values.dhcpHA.primaryAddress) -}}
+{{- if and .Values.dhcpHA.enabled (eq .Values.domain.controllerMode "primary") (ne $localLANAddress $haPrimaryAddress) -}}
 {{- fail "multus.address must match dhcpHA.primaryAddress for the primary" -}}
 {{- end -}}
-{{- if and .Values.dhcpHA.enabled (eq .Values.domain.controllerMode "secondary") (ne $localLANAddress .Values.dhcpHA.standbyAddress) -}}
+{{- if and .Values.dhcpHA.enabled (eq .Values.domain.controllerMode "secondary") (ne $localLANAddress $haStandbyAddress) -}}
 {{- fail "multus.address must match dhcpHA.standbyAddress for the standby" -}}
 {{- end -}}
 {{- if and (or .Values.sysvolSync.enabled .Values.dhcpHA.enabled) (or (not (hasKey .Values.nodeSelector "kubernetes.io/hostname")) (not (index .Values.nodeSelector "kubernetes.io/hostname"))) -}}
@@ -53,11 +73,11 @@
 {{- if and (or .Values.sysvolSync.enabled .Values.dhcpHA.enabled) (not .Values.multus.enabled) -}}
 {{- fail "multus.enabled must be true for each paired controller" -}}
 {{- end -}}
-{{- if and (eq .Values.domain.controllerMode "secondary") .Values.storkServer.enabled -}}
+{{- if and (eq .Values.domain.controllerMode "secondary") $storkServerEnabled -}}
 {{- fail "storkServer.enabled must be false for a secondary controller; use the primary Stork server" -}}
 {{- end -}}
-{{- if and (eq .Values.domain.controllerMode "secondary") (not .Values.storkServer.host) -}}
-{{- fail "storkServer.host is required for a secondary controller" -}}
+{{- if and (eq .Values.domain.controllerMode "secondary") (not $storkServerHost) -}}
+{{- fail "peer.name (or storkServer.host) is required for a secondary controller to find the primary's Stork server" -}}
 {{- end -}}
 {{- if and (eq .Values.domain.controllerMode "secondary") (or (not (hasKey .Values.nodeSelector "kubernetes.io/hostname")) (not (index .Values.nodeSelector "kubernetes.io/hostname"))) -}}
 {{- fail "nodeSelector.kubernetes.io/hostname must pin a secondary controller to its designated host" -}}
@@ -71,11 +91,11 @@
 {{- if and .Values.sysvolSync.enabled (not .Values.sysvolSync.secretName) -}}
 {{- fail "sysvolSync.secretName is required when SYSVOL synchronization is enabled" -}}
 {{- end -}}
-{{- if and .Values.sysvolSync.enabled (eq .Values.domain.controllerMode "primary") (not .Values.sysvolSync.peerAddress) -}}
-{{- fail "sysvolSync.peerAddress is required for the primary SYSVOL writer" -}}
+{{- if and .Values.sysvolSync.enabled (eq .Values.domain.controllerMode "primary") (not $sysvolPeerAddress) -}}
+{{- fail "peer.address (or sysvolSync.peerAddress) is required for the primary SYSVOL writer" -}}
 {{- end -}}
-{{- if and .Values.sysvolSync.enabled (eq .Values.domain.controllerMode "secondary") (not .Values.sysvolSync.writerAddress) -}}
-{{- fail "sysvolSync.writerAddress is required for the secondary SYSVOL reader" -}}
+{{- if and .Values.sysvolSync.enabled (eq .Values.domain.controllerMode "secondary") (not $sysvolWriterAddress) -}}
+{{- fail "peer.address (or sysvolSync.writerAddress) is required for the secondary SYSVOL reader" -}}
 {{- end -}}
 {{- if and .Values.sysvolSync.enabled (or (lt (int .Values.sysvolSync.sshPort) 1) (gt (int .Values.sysvolSync.sshPort) 65535)) -}}
 {{- fail "sysvolSync.sshPort must be between 1 and 65535" -}}
@@ -86,8 +106,8 @@
 {{- if and (eq .Values.domain.controllerMode "secondary") (gt (len (printf "%s-0" (include "domain-in-a-box.fullname" .))) 15) -}}
 {{- fail "the secondary StatefulSet pod name must be no more than 15 characters for Samba's NetBIOS hostname" -}}
 {{- end -}}
-{{- if and .Values.tls.storkServer.enabled (not .Values.tls.storkServer.secretName) -}}
-{{- fail "tls.storkServer.secretName is required when tls.storkServer.enabled is true" -}}
+{{- if and .Values.tls.storkServer.enabled (not $storkServerTLSSecret) -}}
+{{- fail "peer.name (or tls.storkServer.secretName) is required when tls.storkServer.enabled is true" -}}
 {{- end -}}
 {{- if and (not .Values.tls.storkServer.enabled) (not .Values.tls.storkServer.allowInsecureHttp) -}}
 {{- fail "tls.storkServer.allowInsecureHttp must be true when Stork REST TLS is disabled" -}}
@@ -126,11 +146,16 @@ spec:
         app.kubernetes.io/component: domain-controller
       {{- if .Values.multus.enabled }}
       annotations:
-        k8s.v1.cni.cncf.io/networks: '[{ "name": "{{ .Values.multus.networkName }}" }]'
+        k8s.v1.cni.cncf.io/networks: '[{ "name": "{{ include "domain-in-a-box.networkName" . }}" }]'
       {{- end }}
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsUser: 0
+        {{- if not .Values.security.privileged }}
+        seccompProfile:
+          type: RuntimeDefault
+        {{- end }}
       {{- if .Values.dhcpHA.enabled }}
       initContainers:
         - name: prepare-kea-ha-certificates
@@ -138,6 +163,10 @@ spec:
           imagePullPolicy: {{ .Values.coreImage.pullPolicy }}
           securityContext:
             runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+              add: [CHOWN, DAC_OVERRIDE, FOWNER]
           command:
             - sh
             - -ec
@@ -154,14 +183,35 @@ spec:
           image: "{{ .Values.coreImage.repository }}:{{ .Values.coreImage.tag }}"
           imagePullPolicy: {{ .Values.coreImage.pullPolicy }}
           securityContext:
-            privileged: true
+            privileged: {{ .Values.security.privileged }}
+            # Kea/Stork gain their file capabilities after switching Unix users.
+            allowPrivilegeEscalation: true
+            {{- if not .Values.security.privileged }}
             capabilities:
-              add: ["NET_ADMIN", "NET_RAW"]
+              drop: [ALL]
+              add:
+                - CHOWN
+                - DAC_OVERRIDE
+                - DAC_READ_SEARCH
+                - FOWNER
+                - FSETID
+                - SETGID
+                - SETUID
+                - SETPCAP
+                - NET_BIND_SERVICE
+                - NET_ADMIN
+                - NET_RAW
+                - SYS_CHROOT
+                - SYS_PTRACE
+                - SYS_ADMIN
+                - SETFCAP
+                - KILL
+            {{- end }}
           env:
             - name: DIB_REALM
               value: {{ .Values.domain.realm | quote }}
             - name: DIB_DOMAIN
-              value: {{ .Values.domain.name | quote }}
+              value: {{ include "domain-in-a-box.netbiosName" . | quote }}
             - name: DIB_CONTROLLER_MODE
               value: {{ .Values.domain.controllerMode | quote }}
             - name: DIB_SYSVOL_SYNC_ROLE
@@ -173,14 +223,14 @@ spec:
               value: {{ .Values.sysvolSync.intervalSeconds | quote }}
             {{- if eq .Values.domain.controllerMode "primary" }}
             - name: DIB_SYSVOL_SYNC_PEER_ADDRESS
-              value: {{ .Values.sysvolSync.peerAddress | quote }}
+              value: {{ $sysvolPeerAddress | quote }}
             {{- else }}
             - name: DIB_SYSVOL_SYNC_WRITER_ADDRESS
-              value: {{ .Values.sysvolSync.writerAddress | quote }}
+              value: {{ $sysvolWriterAddress | quote }}
             {{- end }}
             {{- end }}
             - name: DIB_JOIN_SERVER
-              value: {{ .Values.domain.joinServer | quote }}
+              value: {{ $joinServer | quote }}
             - name: DIB_DOMAIN_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -191,14 +241,14 @@ spec:
             - name: DIB_INTERFACE
               value: {{ .Values.domain.interface | quote }}
             - name: DIB_DHCP_ENABLED
-              value: {{ .Values.domain.dhcpEnabled | quote }}
+              value: {{ $dhcpEnabled | quote }}
             - name: DIB_DHCP_HA_ENABLED
               value: {{ .Values.dhcpHA.enabled | quote }}
             {{- if .Values.dhcpHA.enabled }}
             - name: DIB_DHCP_HA_PRIMARY_ADDRESS
-              value: {{ .Values.dhcpHA.primaryAddress | quote }}
+              value: {{ $haPrimaryAddress | quote }}
             - name: DIB_DHCP_HA_STANDBY_ADDRESS
-              value: {{ .Values.dhcpHA.standbyAddress | quote }}
+              value: {{ $haStandbyAddress | quote }}
             - name: DIB_DHCP_HA_PRIMARY_NAME
               value: {{ .Values.dhcpHA.primaryName | quote }}
             - name: DIB_DHCP_HA_STANDBY_NAME
@@ -206,10 +256,22 @@ spec:
             {{- end }}
             - name: DIB_DHCP_POOL
               value: {{ .Values.domain.dhcpPool | quote }}
+            {{- with .Values.domain.dhcpDNSServers }}
+            - name: DIB_DHCP_DNS_SERVERS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with .Values.domain.reverseZone }}
+            - name: DIB_REVERSE_ZONE
+              value: {{ . | quote }}
+            {{- end }}
             - name: DIB_DNS_FORWARDERS
               value: {{ .Values.domain.dnsForwarders | quote }}
             - name: DIB_CLUSTER_DOMAIN
               value: {{ $clusterDomain | quote }}
+            - name: DIB_LDAPS_RELAY_ADDRESS
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
             - name: DIB_SAMBA_METRICS_ENABLED
               value: {{ .Values.metrics.enabled | quote }}
             - name: DIB_SAMBA_METRICS_PORT
@@ -389,6 +451,15 @@ spec:
               command: ["python3", "-c", "import json, os, socket, subprocess, sys; addresses = json.loads(subprocess.check_output(['ip', '-j', '-4', 'addr', 'show', 'dev', os.environ['DIB_INTERFACE']]))[0]['addr_info']; ip = next(a['local'] for a in addresses if a['family'] == 'inet' and a['scope'] == 'global'); sys.exit(not os.path.isfile('/run/dib-core-ready') or any(socket.socket().connect_ex((host, port)) for host, port in (('127.0.0.1', 389), ('127.0.0.1', 88), (ip, 5353))))"]
             periodSeconds: 10
             failureThreshold: 3
+          # Critical process crash loops stop the container through the
+          # supervisord watchdog; this probe restarts a controller whose
+          # identity or DNS services stay unresponsive.
+          livenessProbe:
+            exec:
+              command: ["python3", "-c", "import json, os, socket, subprocess, sys; addresses = json.loads(subprocess.check_output(['ip', '-j', '-4', 'addr', 'show', 'dev', os.environ['DIB_INTERFACE']]))[0]['addr_info']; ip = next(a['local'] for a in addresses if a['family'] == 'inet' and a['scope'] == 'global'); sys.exit(any(socket.create_connection((host, port), 5).close() for host, port in (('127.0.0.1', 389), ('127.0.0.1', 88), (ip, 5353))))"]
+            periodSeconds: 30
+            timeoutSeconds: 20
+            failureThreshold: 6
           volumeMounts:
             - name: data
               mountPath: /var/lib/samba
@@ -441,7 +512,7 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
-            {{- if .Values.tls.controller.secretName }}
+            {{- if $controllerTLSSecret }}
             - name: controller-tls
               mountPath: /certs
               readOnly: true
@@ -473,10 +544,10 @@ spec:
             secretName: {{ .Values.sysvolSync.secretName | quote }}
             defaultMode: 0400
         {{- end }}
-        {{- if .Values.tls.controller.secretName }}
+        {{- if $controllerTLSSecret }}
         - name: controller-tls
           secret:
-            secretName: {{ .Values.tls.controller.secretName | quote }}
+            secretName: {{ $controllerTLSSecret | quote }}
             defaultMode: 0400
             items:
               - key: {{ .Values.tls.controller.certificateKey | quote }}
@@ -494,7 +565,7 @@ spec:
         {{- if .Values.tls.storkServer.enabled }}
         - name: stork-server-ca
           secret:
-            secretName: {{ default .Values.tls.storkServer.secretName .Values.tls.storkServer.caSecretName | quote }}
+            secretName: {{ default $storkServerTLSSecret .Values.tls.storkServer.caSecretName | quote }}
             items:
               - key: {{ .Values.tls.storkServer.caKey | quote }}
                 path: ca.crt

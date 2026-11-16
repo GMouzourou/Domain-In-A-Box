@@ -41,7 +41,8 @@ echo "DHCP test interface: ${DIB_INTERFACE:-unavailable}"
 if [[ "${ENABLE_DHCP_CLIENT:-false}" == "true" ]]; then
   if [[ -n "$DIB_INTERFACE" ]] && ip link show "$DIB_INTERFACE" > /dev/null 2>&1; then
     echo "Preparing DHCP test interface $DIB_INTERFACE..."
-    original_default_route=$(ip route show default | head -n1 || true)
+    original_default_route=()
+    read -r -a original_default_route <<< "$(ip route show default | head -n1 || true)"
     if [[ "$DIB_INTERFACE" != "$service_interface" ]]; then
       ip addr flush dev "$DIB_INTERFACE" scope global || true
     fi
@@ -56,8 +57,8 @@ if [[ "${ENABLE_DHCP_CLIENT:-false}" == "true" ]]; then
       fi
       if [[ "$DIB_INTERFACE" != "$service_interface" ]]; then
         ip route del default dev "$DIB_INTERFACE" 2>/dev/null || true
-        if [[ -n "$original_default_route" ]]; then
-          ip route replace "$original_default_route" || true
+        if (( ${#original_default_route[@]} > 0 )); then
+          ip route replace "${original_default_route[@]}" || true
         fi
       fi
     else

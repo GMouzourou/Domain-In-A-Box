@@ -26,10 +26,9 @@ func Retry(desc string, fn func() error, cfg RetryConfig) error {
 	var lastErr error
 
 	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
-		if err := fn(); err == nil {
+		lastErr = fn()
+		if lastErr == nil {
 			return nil
-		} else {
-			lastErr = err
 		}
 
 		if attempt < cfg.MaxAttempts {

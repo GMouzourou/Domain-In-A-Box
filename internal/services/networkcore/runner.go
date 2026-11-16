@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -87,7 +88,7 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 		command []string
 	}
 	steps := []bootstrapStep{
-		{"/var/lib/samba/." + ddnsAccount + "-created", []string{"samba-tool", "user", "create", ddnsAccount, "--description=Kea DHCP DDNS GSS-TSIG service account", "--random-password"}},
+		{"/var/lib/samba/." + ddnsAccount + "-created", []string{"samba-tool", "user", "create", ddnsAccount, "--description=DHCP DDNS GSS-TSIG service account", "--random-password"}},
 		{"/var/lib/samba/." + ddnsAccount + "-expiry-set", []string{"samba-tool", "user", "setexpiry", ddnsAccount, "--noexpiry"}},
 		{"/var/lib/samba/." + ddnsAccount + "-group-added", []string{"samba-tool", "group", "addmembers", "DnsAdmins", ddnsAccount}},
 		{"/var/lib/kea/." + ddnsAccount + "-keytab-exported", []string{"samba-tool", "domain", "exportkeytab", "/var/lib/kea/keaddns.keytab", "--principal=" + ddnsAccount + "@" + realm}},
@@ -107,55 +108,12 @@ func (r *Runner) Bootstrap(ctx context.Context) error {
 	if err := run(ctx, "chown", "root:_kea", "/var/lib/kea/keaddns.keytab"); err != nil {
 		return err
 	}
-	if err := run(ctx, "chmod", "660", "/var/lib/kea/keaddns.keytab"); err != nil {
-		return err
+	// The DDNS service obtains its own tickets as _kea. A root-owned cache
+	// left by earlier releases would be unreadable, so remove it.
+	if err := os.Remove("/run/kea/keaddns.ccache"); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale Kea DDNS credential cache: %w", err)
 	}
-	if err := os.WriteFile("/run/kea/keaddns.ccache", nil, 0o660); err != nil {
-		return fmt.Errorf("create Kea DDNS credential cache: %w", err)
-	}
-	if err := run(ctx, "chown", "root:_kea", "/run/kea/keaddns.ccache"); err != nil {
-		return err
-	}
-	if err := kinitKeaDDNS(ctx, hostname, realm); err != nil {
-		return err
-	}
-
-	cronLine := "0 */4 * * * KRB5CCNAME=FILE:/run/kea/keaddns.ccache /usr/bin/kinit -kt /var/lib/kea/keaddns.keytab " + ddnsAccount + "@" + realm
-	return ensureCronEntry(ctx, "_kea", cronLine)
-}
-
-func kinitKeaDDNS(ctx context.Context, hostname, realm string) error {
-	return runWithEnvironment(ctx, []string{"KRB5CCNAME=FILE:/run/kea/keaddns.ccache"}, "kinit", "-kt", "/var/lib/kea/keaddns.keytab", keaDDNSAccount(hostname)+"@"+realm)
-}
-
-func ensureCronEntry(ctx context.Context, user, line string) error {
-	list := exec.CommandContext(ctx, "crontab", "-u", user, "-l")
-	current, err := list.Output()
-	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); !ok || exitError.ExitCode() != 1 {
-			return fmt.Errorf("read %s crontab: %w", user, err)
-		}
-		current = nil
-	}
-
-	var updated strings.Builder
-	for _, existing := range strings.Split(string(current), "\n") {
-		if !strings.Contains(existing, "/var/lib/kea/keaddns.keytab") && existing != "" {
-			updated.WriteString(existing)
-			updated.WriteByte('\n')
-		}
-	}
-	updated.WriteString(line)
-	updated.WriteByte('\n')
-
-	install := exec.CommandContext(ctx, "crontab", "-u", user, "-")
-	install.Stdin = strings.NewReader(updated.String())
-	install.Stdout = os.Stdout
-	install.Stderr = os.Stderr
-	if err := install.Run(); err != nil {
-		return fmt.Errorf("install %s crontab entry: %w", user, err)
-	}
-	return nil
+	return run(ctx, "chmod", "640", "/var/lib/kea/keaddns.keytab")
 }
 
 func (r *Runner) Validate(ctx context.Context) error {
@@ -174,7 +132,6 @@ func (r *Runner) Validate(ctx context.Context) error {
 	if dhcpEnabled || dhcpHAEnabled {
 		commands = append(commands,
 			[]string{"/usr/sbin/kea-dhcp4", "-t", "/etc/kea/kea-dhcp4.conf"},
-			[]string{"/usr/sbin/kea-dhcp-ddns", "-t", "/etc/kea/kea-dhcp-ddns.conf"},
 		)
 	}
 	for _, command := range commands {
@@ -205,7 +162,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			return nil
 		}
 		return process.Replace("/usr/sbin/kea-dhcp4", "-c", "/etc/kea/kea-dhcp4.conf")
-	case "kea-dhcp-ddns":
+	case "dhcp-ddns":
 		enabled, err := dhcpEnabled()
 		if err != nil {
 			return err
@@ -215,12 +172,12 @@ func (r *Runner) Run(ctx context.Context) error {
 			return err
 		}
 		if !enabled && !haEnabled {
-			r.log.Infof("DHCP DDNS is disabled; not starting Kea")
+			r.log.Infof("DHCP DDNS is disabled; not starting the DDNS service")
 			return nil
 		}
-		return process.Replace("/usr/sbin/kea-dhcp-ddns", "-c", "/etc/kea/kea-dhcp-ddns.conf")
+		return r.runDDNS(ctx)
 	default:
-		return fmt.Errorf("DIB_NETWORK_COMPONENT must be one of chrony, bind, kea-dhcp4, or kea-dhcp-ddns")
+		return fmt.Errorf("DIB_NETWORK_COMPONENT must be one of chrony, bind, kea-dhcp4, or dhcp-ddns")
 	}
 }
 
@@ -264,17 +221,6 @@ func (r *Runner) Health(ctx context.Context) error {
 
 func run(ctx context.Context, name string, args ...string) error {
 	command := exec.CommandContext(ctx, name, args...)
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	if err := command.Run(); err != nil {
-		return fmt.Errorf("run %s: %w", name, err)
-	}
-	return nil
-}
-
-func runWithEnvironment(ctx context.Context, environment []string, name string, args ...string) error {
-	command := exec.CommandContext(ctx, name, args...)
-	command.Env = append(os.Environ(), environment...)
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	if err := command.Run(); err != nil {
@@ -432,69 +378,253 @@ func configureKea(ctx context.Context) error {
 	if err := run(ctx, "chmod", "775", "/var/lib/kea"); err != nil {
 		return err
 	}
-	interfaceName, err := environment("DIB_INTERFACE")
+	if err := repairKeaLogPermissions("/var/log/kea"); err != nil {
+		return err
+	}
+	values := map[string]string{}
+	for _, key := range []string{"DIB_INTERFACE", "IP", "GATEWAY", "DNS_DOMAIN", "SUBNET", "DIB_DHCP_POOL", "DIB_CONTROLLER_MODE"} {
+		value, err := environment(key)
+		if err != nil {
+			return err
+		}
+		values[key] = value
+	}
+	haSettings, err := dhcpHASettingsFromEnvironment(values["DIB_CONTROLLER_MODE"], values["IP"])
 	if err != nil {
 		return err
 	}
-	ip, err := environment("IP")
+	dnsServers, err := dhcpDNSServers(values["IP"], haSettings)
 	if err != nil {
 		return err
 	}
-	gateway, err := environment("GATEWAY")
+	dhcp4 := buildKeaDHCP4Configuration(values["DIB_INTERFACE"], values["IP"], values["GATEWAY"], values["DNS_DOMAIN"], values["SUBNET"], values["DIB_DHCP_POOL"], haSettings)
+	setKeaDNSServers(dhcp4, dnsServers)
+	const path = "/etc/kea/kea-dhcp4.conf"
+	if err := writeJSONIfMissing(path, dhcp4); err != nil {
+		return err
+	}
+	changed, err := reconcileKeaDHCP4Configuration(path, dhcp4, haSettings)
 	if err != nil {
 		return err
 	}
-	dnsDomain, err := environment("DNS_DOMAIN")
-	if err != nil {
-		return err
+	if changed {
+		platformlog.New("network-core").Infof("reconciled DIB-managed settings in %s; the previous file was saved as %s.dib-previous", path, path)
 	}
-	subnet, err := environment("SUBNET")
-	if err != nil {
-		return err
+	return validateKeaDHCPHAConfiguration(path, haSettings)
+}
+
+// repairKeaLogPermissions undoes the recursive chmod 664 applied by earlier
+// releases, which left the log directory untraversable for _kea. _kea can
+// write to the directory, so the walk is confined to it and skips symlinks.
+func repairKeaLogPermissions(directory string) error {
+	directoryMode := os.FileMode(0o775) | os.ModeSetgid
+	// The directory itself sits in root-owned /var/log; repair it first so
+	// the confined walk can traverse it.
+	if err := os.Chmod(directory, directoryMode); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("set Kea log permissions on %s: %w", directory, err)
 	}
-	pool, err := environment("DIB_DHCP_POOL")
+	root, err := os.OpenRoot(directory)
 	if err != nil {
-		return err
+		return fmt.Errorf("open Kea log directory: %w", err)
 	}
-	realm, err := environment("DIB_REALM")
-	if err != nil {
-		return err
+	defer root.Close()
+	return fs.WalkDir(root.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		mode := os.FileMode(0o664)
+		if entry.IsDir() {
+			mode = directoryMode
+		}
+		if err := root.Chmod(path, mode); err != nil {
+			return fmt.Errorf("set Kea log permissions on %s: %w", filepath.Join(directory, path), err)
+		}
+		return nil
+	})
+}
+
+// dhcpDNSServers returns the resolvers advertised to DHCP clients. Without an
+// explicit DIB_DHCP_DNS_SERVERS list, an HA pair advertises the local controller
+// first and its partner second so clients survive the loss of either one.
+func dhcpDNSServers(localAddress string, ha dhcpHASettings) ([]string, error) {
+	configured := strings.FieldsFunc(os.Getenv("DIB_DHCP_DNS_SERVERS"), func(r rune) bool {
+		return r == ',' || r == ' '
+	})
+	if len(configured) > 0 {
+		for _, server := range configured {
+			if net.ParseIP(server).To4() == nil {
+				return nil, fmt.Errorf("DIB_DHCP_DNS_SERVERS must contain IPv4 addresses, got %q", server)
+			}
+		}
+		return configured, nil
 	}
-	hostname, err := environment("CONTAINER_HOSTNAME")
-	if err != nil {
-		return err
+	servers := []string{localAddress}
+	if ha.enabled {
+		for _, peer := range []string{ha.primaryAddress, ha.standbyAddress} {
+			if peer != localAddress {
+				servers = append(servers, peer)
+			}
+		}
 	}
-	controllerMode, err := environment("DIB_CONTROLLER_MODE")
-	if err != nil {
-		return err
+	return servers, nil
+}
+
+func setKeaDNSServers(configuration map[string]any, servers []string) {
+	dhcp4 := configuration["Dhcp4"].(map[string]any)
+	for _, option := range dhcp4["option-data"].([]map[string]any) {
+		if option["name"] == "domain-name-servers" {
+			option["data"] = strings.Join(servers, ", ")
+		}
 	}
-	reverseZone, err := environment("REVERSE_ZONE")
+}
+
+// keaManagedGlobals are the DHCPv4 globals DIB owns in persisted configurations.
+var keaManagedGlobals = []string{
+	"dhcp-ddns", "ddns-send-updates", "ddns-qualifying-suffix", "ddns-override-client-update",
+	"ddns-override-no-update", "ddns-replace-client-name", "ddns-update-on-renew",
+	"hostname-char-set", "hostname-char-replacement",
+}
+
+// reconcileKeaDHCP4Configuration brings DIB-managed settings in a persisted
+// configuration up to date while preserving operator additions. Earlier
+// releases only wrote them at first provisioning, so upgrades and peer address
+// changes never reached existing volumes.
+func reconcileKeaDHCP4Configuration(path string, desired map[string]any, ha dhcpHASettings) (bool, error) {
+	original, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return false, fmt.Errorf("read Kea DHCPv4 configuration: %w", err)
+	}
+	var configuration map[string]any
+	if err := json.Unmarshal(original, &configuration); err != nil {
+		return false, fmt.Errorf("parse Kea DHCPv4 configuration: %w", err)
+	}
+	dhcp4, ok := configuration["Dhcp4"].(map[string]any)
+	if !ok {
+		return false, fmt.Errorf("Kea DHCPv4 configuration has no Dhcp4 object")
+	}
+	var generic map[string]any
+	encoded, err := json.Marshal(desired)
+	if err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(encoded, &generic); err != nil {
+		return false, err
+	}
+	want := generic["Dhcp4"].(map[string]any)
+	for _, key := range keaManagedGlobals {
+		dhcp4[key] = want[key]
+	}
+	reconcileKeaOption(dhcp4, want, "domain-name-servers")
+	if err := reconcileKeaHA(dhcp4, want, ha); err != nil {
+		return false, err
 	}
 
-	haSettings, err := dhcpHASettingsFromEnvironment(controllerMode, ip)
+	before, err := json.Marshal(mustDecode(original))
 	if err != nil {
-		return err
+		return false, err
 	}
-	dhcp4 := buildKeaDHCP4Configuration(interfaceName, ip, gateway, dnsDomain, subnet, pool, haSettings)
-	ddns := map[string]any{"DhcpDdns": map[string]any{
-		"control-socket":  map[string]any{"socket-type": "unix", "socket-name": "kea-ddns-ctrl-socket"},
-		"forward-ddns":    map[string]any{"ddns-domains": []map[string]any{{"name": dnsDomain + ".", "dns-servers": []map[string]string{{"ip-address": "127.0.0.1"}}}}},
-		"reverse-ddns":    map[string]any{"ddns-domains": []map[string]any{{"name": reverseZone + ".", "dns-servers": []map[string]string{{"ip-address": "127.0.0.1"}}}}},
-		"hooks-libraries": []map[string]any{{"library": "libddns_gss_tsig.so", "parameters": map[string]any{"server-principal": "DNS/" + hostname + "." + dnsDomain + "@" + realm, "client-principal": keaDDNSAccount(hostname) + "@" + realm, "credentials-cache": "FILE:/run/kea/keaddns.ccache", "servers": []map[string]string{{"id": "samba-dc", "ip-address": "127.0.0.1"}}}}},
-		"loggers":         []map[string]any{{"name": "kea-dhcp-ddns", "output_options": []map[string]string{{"output": "/var/log/kea/kea-dhcp-ddns.log"}}, "severity": "INFO"}},
-	}}
-	if err := writeJSONIfMissing("/etc/kea/kea-dhcp4.conf", dhcp4); err != nil {
-		return err
+	after, err := json.Marshal(configuration)
+	if err != nil {
+		return false, err
 	}
-	if err := validateKeaDHCPHAConfiguration("/etc/kea/kea-dhcp4.conf", haSettings); err != nil {
-		return err
+	if string(before) == string(after) {
+		return false, nil
 	}
-	if err := writeJSONIfMissing("/etc/kea/kea-dhcp-ddns.conf", ddns); err != nil {
-		return err
+	info, err := os.Stat(path)
+	if err != nil {
+		return false, err
 	}
-	return reconcileKeaDDNSPrincipal("/etc/kea/kea-dhcp-ddns.conf", hostname, dnsDomain, realm)
+	if err := os.WriteFile(path+".dib-previous", original, info.Mode().Perm()); err != nil {
+		return false, fmt.Errorf("save previous Kea DHCPv4 configuration: %w", err)
+	}
+	return true, writeJSONAtomically(path, configuration)
+}
+
+func mustDecode(contents []byte) any {
+	var value any
+	_ = json.Unmarshal(contents, &value)
+	return value
+}
+
+func reconcileKeaOption(dhcp4, want map[string]any, name string) {
+	var desired any
+	for _, option := range want["option-data"].([]any) {
+		if option.(map[string]any)["name"] == name {
+			desired = option
+		}
+	}
+	options, _ := dhcp4["option-data"].([]any)
+	for index, option := range options {
+		if entry, _ := option.(map[string]any); entry["name"] == name {
+			options[index] = desired
+			return
+		}
+	}
+	dhcp4["option-data"] = append(options, desired)
+}
+
+// reconcileKeaHA rewrites the HA relationship and the primary scope pool class
+// from the current settings. Enabling or disabling HA, or reusing a volume for
+// the other role, changes lease authority and is left to validation to refuse.
+func reconcileKeaHA(dhcp4, want map[string]any, ha dhcpHASettings) error {
+	if !ha.enabled {
+		return nil
+	}
+	var desiredParameters any
+	for _, rawHook := range want["hooks-libraries"].([]any) {
+		if hook := rawHook.(map[string]any); hook["library"] == "libdhcp_ha.so" {
+			desiredParameters = hook["parameters"]
+		}
+	}
+	hooks, _ := dhcp4["hooks-libraries"].([]any)
+	var haHook map[string]any
+	for _, rawHook := range hooks {
+		if hook, _ := rawHook.(map[string]any); hook["library"] == "libdhcp_ha.so" {
+			haHook = hook
+		}
+	}
+	if haHook == nil {
+		return nil
+	}
+	localName, partnerName := ha.primaryName, ha.standbyName
+	if ha.controllerMode == "secondary" {
+		localName, partnerName = partnerName, localName
+	}
+	parameters, _ := haHook["parameters"].(map[string]any)
+	relationships, _ := parameters["high-availability"].([]any)
+	if len(relationships) == 1 {
+		current, _ := relationships[0].(map[string]any)
+		if current["this-server-name"] == partnerName {
+			return fmt.Errorf("persisted Kea DHCPv4 HA identity %q belongs to the %s's partner; refusing to reuse this volume with the opposite role", partnerName, localName)
+		}
+	}
+	haHook["parameters"] = desiredParameters
+
+	class := keaDHCPHAPrimaryClass(ha.primaryName)
+	subnets, _ := dhcp4["subnet4"].([]any)
+	for _, rawSubnet := range subnets {
+		subnet, _ := rawSubnet.(map[string]any)
+		if subnet["id"] != float64(1) {
+			continue
+		}
+		pools, _ := subnet["pools"].([]any)
+		for _, rawPool := range pools {
+			pool, _ := rawPool.(map[string]any)
+			classes, _ := pool["client-classes"].([]any)
+			for index, existing := range classes {
+				if name, _ := existing.(string); strings.HasPrefix(name, "HA_") {
+					classes[index] = class
+				}
+			}
+		}
+	}
+	return nil
 }
 
 type dhcpHASettings struct {
@@ -670,46 +800,6 @@ func validateKeaDHCPHAConfiguration(path string, expected dhcpHASettings) error 
 	return nil
 }
 
-func reconcileKeaDDNSPrincipal(path, hostname, dnsDomain, realm string) error {
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read Kea DHCP-DDNS configuration: %w", err)
-	}
-	var configuration map[string]any
-	if err := json.Unmarshal(contents, &configuration); err != nil {
-		return fmt.Errorf("parse Kea DHCP-DDNS configuration: %w", err)
-	}
-	dhcpDdns, ok := configuration["DhcpDdns"].(map[string]any)
-	if !ok {
-		return fmt.Errorf("Kea DHCP-DDNS configuration has no DhcpDdns object")
-	}
-	hooks, ok := dhcpDdns["hooks-libraries"].([]any)
-	if !ok {
-		return fmt.Errorf("Kea DHCP-DDNS configuration has no hook libraries")
-	}
-	found := false
-	for _, rawHook := range hooks {
-		hook, _ := rawHook.(map[string]any)
-		if hook["library"] != "libddns_gss_tsig.so" {
-			continue
-		}
-		parameters, _ := hook["parameters"].(map[string]any)
-		if parameters == nil {
-			parameters = map[string]any{}
-			hook["parameters"] = parameters
-		}
-		parameters["server-principal"] = "DNS/" + hostname + "." + dnsDomain + "@" + realm
-		parameters["client-principal"] = keaDDNSAccount(hostname) + "@" + realm
-		parameters["credentials-cache"] = "FILE:/run/kea/keaddns.ccache"
-		parameters["servers"] = []map[string]string{{"id": "samba-dc", "ip-address": "127.0.0.1"}}
-		found = true
-	}
-	if !found {
-		return fmt.Errorf("Kea DHCP-DDNS configuration does not contain the managed GSS-TSIG hook")
-	}
-	return writeJSONAtomically(path, configuration)
-}
-
 func buildKeaDHCP4Configuration(interfaceName, ip, gateway, dnsDomain, subnet, pool string, ha dhcpHASettings) map[string]any {
 	poolConfig := map[string]any{"pool": pool}
 	if ha.enabled {
@@ -725,9 +815,25 @@ func buildKeaDHCP4Configuration(interfaceName, ip, gateway, dnsDomain, subnet, p
 			{"name": "domain-name", "code": 15, "data": dnsDomain},
 			{"name": "domain-search", "code": 119, "data": dnsDomain},
 		},
-		"subnet4":   []map[string]any{{"id": 1, "subnet": subnet, "interface": interfaceName, "pools": []map[string]any{poolConfig}}},
-		"dhcp-ddns": map[string]any{"enable-updates": true},
-		"loggers":   []map[string]any{{"name": "kea-dhcp4", "output_options": []map[string]string{{"output": "/var/log/kea/kea-dhcp4.log"}}, "severity": "INFO"}},
+		"subnet4": []map[string]any{{"id": 1, "subnet": subnet, "interface": interfaceName, "pools": []map[string]any{poolConfig}}},
+		"dhcp-ddns": map[string]any{
+			"enable-updates": true,
+			"server-ip":      "127.0.0.1",
+			"server-port":    ddnsListenPort,
+			"ncr-protocol":   "UDP",
+			"ncr-format":     "JSON",
+		},
+		// Clients that update their own A record (Windows domain members) keep
+		// doing so; DIB registers the rest and refreshes on renewal.
+		"ddns-send-updates":           true,
+		"ddns-qualifying-suffix":      dnsDomain + ".",
+		"ddns-override-client-update": false,
+		"ddns-override-no-update":     false,
+		"ddns-replace-client-name":    "never",
+		"ddns-update-on-renew":        true,
+		"hostname-char-set":           "[^A-Za-z0-9.-]",
+		"hostname-char-replacement":   "",
+		"loggers":                     []map[string]any{{"name": "kea-dhcp4", "output_options": []map[string]string{{"output": "/var/log/kea/kea-dhcp4.log"}}, "severity": "INFO"}},
 	}
 	if ha.enabled {
 		localName := ha.primaryName

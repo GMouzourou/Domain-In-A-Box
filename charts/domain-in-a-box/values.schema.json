@@ -1,0 +1,480 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "privileged": {"type": "boolean"}
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "ingress": {"type": "array", "items": {"type": "object"}},
+        "egress": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "coreImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        },
+        "tag": {
+          "type": "string"
+        }
+      }
+    },
+    "storkImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ]
+        },
+        "tag": {
+          "type": "string"
+        }
+      }
+    },
+    "domain": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "realm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "controllerMode": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "secondary"
+          ]
+        },
+        "joinServer": {
+          "type": "string"
+        },
+        "interface": {
+          "type": "string"
+        },
+        "dhcpPool": {
+          "type": "string"
+        },
+        "dhcpDNSServers": {
+          "type": "string"
+        },
+        "dnsForwarders": {
+          "type": "string"
+        },
+        "reverseZone": {
+          "type": "string"
+        },
+        "syncPasswordOnRestart": {
+          "type": "boolean"
+        },
+        "dhcpEnabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "realm"
+      ]
+    },
+    "peer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "dhcpHA": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "primaryAddress": {
+          "type": "string"
+        },
+        "standbyAddress": {
+          "type": "string"
+        },
+        "primaryName": {
+          "type": "string"
+        },
+        "standbyName": {
+          "type": "string"
+        }
+      }
+    },
+    "sysvolSync": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "secretName": {
+          "type": "string"
+        },
+        "hostKeyKey": {
+          "type": "string"
+        },
+        "clientPrivateKeyKey": {
+          "type": "string"
+        },
+        "clientPublicKeyKey": {
+          "type": "string"
+        },
+        "knownHostsKey": {
+          "type": "string"
+        },
+        "peerAddress": {
+          "type": "string"
+        },
+        "writerAddress": {
+          "type": "string"
+        },
+        "sshPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "intervalSeconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "secretName": {
+          "type": "string"
+        },
+        "adminPasswordKey": {
+          "type": "string"
+        },
+        "databasePasswordKey": {
+          "type": "string"
+        },
+        "ldapPasswordKey": {
+          "type": "string"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    },
+    "storkServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "resources": {
+          "type": "object"
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "clusterDNS": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "domain": {
+          "type": "string"
+        }
+      }
+    },
+    "multus": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "createNAD": {
+          "type": "boolean"
+        },
+        "networkName": {
+          "type": "string"
+        },
+        "storkServerNetworkName": {
+          "type": "string"
+        },
+        "masterInterface": {
+          "type": "string"
+        },
+        "address": {
+          "type": "string"
+        },
+        "gateway": {
+          "type": "string"
+        }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "controller": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "certificateKey": {
+              "type": "string"
+            },
+            "privateKeyKey": {
+              "type": "string"
+            },
+            "caKey": {
+              "type": "string"
+            },
+            "secretName": {
+              "type": "string"
+            }
+          }
+        },
+        "storkServer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "secretName": {
+              "type": "string"
+            },
+            "certificateKey": {
+              "type": "string"
+            },
+            "privateKeyKey": {
+              "type": "string"
+            },
+            "caSecretName": {
+              "type": "string"
+            },
+            "caKey": {
+              "type": "string"
+            },
+            "allowInsecureHttp": {
+              "type": "boolean"
+            }
+          }
+        },
+        "ldap": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "caSecretName": {
+              "type": "string"
+            },
+            "caKey": {
+              "type": "string"
+            },
+            "serverName": {
+              "type": "string"
+            },
+            "skipServerVerification": {
+              "type": "boolean"
+            },
+            "allowInsecureSkipServerVerification": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "external": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "host": {
+              "type": "string"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "name": {
+              "type": "string"
+            },
+            "user": {
+              "type": "string"
+            },
+            "passwordSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                }
+              }
+            },
+            "tls": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "sslMode": {
+                  "type": "string",
+                  "enum": [
+                    "disable",
+                    "allow",
+                    "prefer",
+                    "require",
+                    "verify-ca",
+                    "verify-full"
+                  ]
+                },
+                "allowInsecure": {
+                  "type": "boolean"
+                },
+                "rootCertSecretName": {
+                  "type": "string"
+                },
+                "rootCertKey": {
+                  "type": "string"
+                },
+                "clientCertSecretName": {
+                  "type": "string"
+                },
+                "clientCertKey": {
+                  "type": "string"
+                },
+                "clientKeyKey": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "internal": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "image": {
+              "type": "string"
+            },
+            "imagePullPolicy": {
+              "type": "string",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            },
+            "resources": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "storageClass": {
+          "type": "string"
+        },
+        "accessMode": {
+          "type": "string",
+          "enum": [
+            "ReadWriteOnce",
+            "ReadWriteOncePod",
+            "ReadWriteMany"
+          ]
+        },
+        "size": {
+          "type": "string"
+        }
+      }
+    },
+    "resources": {
+      "type": "object"
+    },
+    "nodeSelector": {
+      "type": "object"
+    },
+    "tolerations": {
+      "type": "array"
+    },
+    "affinity": {
+      "type": "object"
+    },
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "global": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "domain"
+  ]
+}

@@ -32,10 +32,18 @@ lost, and will stay off until DHCP authority has been returned.
    Wait until `state` is `partner-down`, and check that the primary's peer
    name (default `dib-primary`) is not listed in `scopes`.
 
-2. Check `unsent-update-count`. If it is not zero, some lease updates may not
-   have reached the secondary, and taking over could hand out an address that
-   is already in use. Investigate first. Use `--accept-unsent-updates` only if
-   you understand and accept that risk.
+2. Consider which leases the secondary may not know about. In hot-standby the
+   primary waits for the secondary to acknowledge each lease before answering
+   the client, so normally nothing is lost. The exception is a period when the
+   secondary was itself unreachable or restarting while the primary kept
+   serving: leases the primary issued then, and had not resynchronized before
+   it failed, are unknown to the secondary, which could offer one of those
+   addresses again. If that applies, prefer waiting for the primary.
+
+   The status output's `unsent-update-count` is not a guide here. Kea counts it
+   from process start and never resets it, and it records updates the
+   *secondary* failed to send, so `takeover` no longer checks it. The old
+   `--accept-unsent-updates` flag is accepted but has no effect.
 
 3. Take over:
 
@@ -120,6 +128,37 @@ with its existing data.
 3. Install a new secondary with empty storage, as in
    [Multi-controller setup](multi-controller.md#4-install-the-secondary).
    Using a new controller name avoids confusion with the removed one.
+
+## Change a controller's DHCP HA address or name
+
+A controller's own LAN address is fixed when it is provisioned: its
+certificates, DNS records and Samba configuration use it. To move the
+secondary, [rebuild it](#replace-a-permanently-failed-secondary) at the new
+address (with a certificate for that address), then use this procedure so the
+primary uses the new peer address.
+
+DHCP HA peer names and addresses are reconciled on every start (see
+[Network, DNS and DHCP](configuration.md#network-dns-and-dhcp)), so the change
+is made through the Helm values, not by editing `kea-dhcp4.conf`.
+
+1. Update `multus.address` and `peer.address` (or the `dhcpHA.primaryAddress`,
+   `dhcpHA.standbyAddress` overrides, or the peer names) in the values of
+   **both** releases. Both controllers must list the same
+   peers.
+2. Upgrade both releases. Each controller rewrites its HA peer list and saves
+   the previous file as `kea-dhcp4.conf.dib-previous`.
+3. Check that both controllers report HA state `hot-standby` and that each
+   reaches its partner:
+
+   ```bash
+   kubectl -n dib exec dib-primary-0 -- dib-network-core-ctl dhcp-ha status
+   kubectl -n dib exec dib-secondary-0 -- dib-network-core-ctl dhcp-ha status
+   ```
+
+The pair cannot synchronize until both controllers are upgraded, so upgrade
+them one after the other and check the status straight away. A controller refuses to start if the change
+would swap its role (its persisted name becomes its partner's name); roles are
+fixed when a controller is provisioned.
 
 ## Never restore a single controller from a backup
 

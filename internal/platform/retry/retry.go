@@ -16,10 +16,9 @@ func Do(ctx context.Context, attempts int, delay time.Duration, fn func() error)
 
 	var lastErr error
 	for i := 1; i <= attempts; i++ {
-		if err := fn(); err == nil {
+		lastErr = fn()
+		if lastErr == nil {
 			return nil
-		} else {
-			lastErr = err
 		}
 
 		if i == attempts {

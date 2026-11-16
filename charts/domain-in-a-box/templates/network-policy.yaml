@@ -1,0 +1,46 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "domain-in-a-box.fullname" . }}
+  labels:
+    {{- include "domain-in-a-box.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "domain-in-a-box.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "domain-in-a-box.name" . }}
+      ports:
+        - {protocol: TCP, port: 636}
+        - {protocol: TCP, port: 8081}
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 80}
+        - {protocol: TCP, port: 5432}
+    {{- with .Values.networkPolicy.ingress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "domain-in-a-box.name" . }}
+      ports:
+        - {protocol: TCP, port: 636}
+        - {protocol: TCP, port: 8081}
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 80}
+        - {protocol: TCP, port: 5432}
+    # DNS forwarders and time sources may be outside Kubernetes.
+    - ports:
+        - {protocol: TCP, port: 53}
+        - {protocol: UDP, port: 53}
+        - {protocol: UDP, port: 123}
+    {{- with .Values.networkPolicy.egress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

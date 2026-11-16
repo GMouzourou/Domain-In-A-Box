@@ -1,0 +1,78 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - revive
+  settings:
+    gosec:
+      excludes:
+        # The controllers run fixed system tools as root and write files that
+        # the packaged daemons must read; commands and paths come from code or
+        # validated configuration, not from network input.
+        - G204
+        - G301
+        - G302
+        - G304
+        - G306
+        # errcheck already reports unchecked errors.
+        - G104
+        # Go bounds-checks slices; this rule misreads length-guarded indexes.
+        - G602
+        # Taint analysis treats operator configuration as hostile input.
+        - G702
+        - G703
+        - G704
+    staticcheck:
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        # Error strings may start with proper nouns such as Kerberos and Samba.
+        - -ST1005
+        - -QF1001
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unreachable-code
+        - name: var-declaration
+  exclusions:
+    presets:
+      - std-error-handling
+      - common-false-positives
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+      # Start-up errors are shown to operators verbatim and quoted in docs/troubleshooting.md.
+      - path: (internal/platform/startup/|cmd/dib-bootstrap-ctl/start\.go)
+        linters:
+          - revive
+        text: error-strings
+
+formatters:
+  enable:
+    - gofmt

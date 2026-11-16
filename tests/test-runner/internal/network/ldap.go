@@ -235,7 +235,7 @@ func ldapTLSConfig(server, caPath string, allowInsecure bool) (*tls.Config, erro
 	if caPath == "" {
 		return &tls.Config{
 			ServerName:         server,
-			InsecureSkipVerify: allowInsecure,
+			InsecureSkipVerify: allowInsecure, //nolint:gosec // G402: opt-in for test stacks without a CA bundle.
 		}, nil
 	}
 

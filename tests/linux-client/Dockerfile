@@ -55,6 +55,7 @@ RUN go mod download && go build -o /usr/local/bin/test-runner && chmod +x /usr/l
 # Copy entrypoint script that starts dbus-daemon and DHCP client
 WORKDIR /
 COPY tests/linux-client/entrypoint.sh /entrypoint.sh
+COPY tests/linux-client/ldap-gssapi-test.sh /usr/local/bin/ldap-gssapi-test.sh
 RUN chmod +x /entrypoint.sh
 
 # Entry point

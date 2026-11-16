@@ -68,8 +68,9 @@ profile explicitly opts into LDAP TLS bypass for its test client.
 [kind](https://kind.sigs.k8s.io/) cluster. A dedicated Docker bridge
 (`192.168.3.0/24`) is attached to the kind node and used as the macvlan master,
 so the domain controller and the test client share a real L2 segment. That is
-what allows the client to request an actual DHCP lease from Kea, which the
-compose environment cannot do.
+what allows the client to request an actual DHCP lease from Kea. The default
+Compose profile skips DHCP requests to preserve Docker-managed networking;
+a disposable bridge fixture can explicitly enable them.
 
 ```bash
 make k8s-all      # up + images + deploy + test
@@ -91,8 +92,34 @@ the integration job checks that the registration marker contains that
 in-cluster Service FQDN. It then restarts Stork and the controller, checking
 that retained state keeps the same callback endpoint. Agent
 registration uses Stork's server-token flow, which also exercises the
-server-to-agent TLS ping. This kind setup is single-node and does not replace
-different-node validation in a multi-node RKE2 lab.
+server-to-agent TLS ping. `stork-management-test.py` additionally authenticates
+through AD by default and calls Stork's live machine-state API, requiring active monitored
+BIND and Kea daemons and exactly one registered machine before and after
+restarts. HTTPS with an untrusted root or incorrect hostname must fail.
+The default kind setup is single-node. Set `KIND_CONFIG` to a kind configuration
+with an additional worker and `STORK_TEST_NODE` to that worker's hostname to
+run the same-node checks and then repeat live callbacks with Stork on the
+other node. The controller and DHCP client remain pinned to the control-plane
+node because their macvlan interfaces must share a master.
+
+```bash
+KIND_CONFIG="$PWD/tests/kubernetes/kind-multi-node.yaml" \
+STORK_TEST_NODE=dib-worker make k8s-all
+```
+
+The controller's internal LDAPS relay lets the AD-backed Stork login reach
+Samba without extending its LAN interface bindings. For investigating callbacks independently,
+`stork-management-test.py` accepts explicit `STORK_TEST_AUTH_METHOD=internal`,
+`STORK_TEST_USERNAME`, and `STORK_TEST_PASSWORD`; the standard job does not
+silently fall back to that method.
+For a two-controller lab, run the script inside each controller with
+`STORK_TEST_MACHINE_COUNT=2`. It checks the exact registered-machine count and
+selects the one authorized callback matching that controller's saved marker.
+
+The job also checks that Stork rejects an incorrect LDAP hostname and an
+untrusted LDAP CA, restores the valid configuration, and intentionally stops
+BIND to verify Kubernetes liveness recovery. Cluster DNS forwarding and live
+agent callbacks must still work after the container restarts.
 
 The lab generates a short-lived test CA and service certificates with the
 controller and Stork Service DNS names, creates the chart's TLS Secrets, and
@@ -118,6 +145,19 @@ bash tests/kubernetes/helm-chart-test.sh
 
 ## Debugging Tips
 
+### ExternalDNS bridge fixture
+
+`dnsbridge/integration.py` runs the official ExternalDNS controller against two
+disposable Samba controllers. It checks authentication/authorization negatives,
+protected/manual-name preservation, paired address/TXT ownership, lifecycle and
+controller failover. Controller replication summaries are retained with failure
+diagnostics.
+
+The raw Samba fixture sets `dreplsrv:periodic_interval = 5`: Samba's normal
+300-second periodic replication fallback exceeds the fixture's 180-second DNS
+convergence deadline after a controller restart. This test-only setting does not
+change production replication or relax DNS assertions.
+
 ### Bring the stack up without immediately tearing it down
 
 ```bash
@@ -130,6 +170,17 @@ docker compose -f tests/docker-compose.test.yml up -d --build
 docker logs domain-in-a-box-test-server
 docker logs domain-in-a-box-test-client
 ```
+
+### GSSAPI regression
+
+The Kubernetes job also runs `linux-client/ldap-gssapi-test.sh`: encrypted
+LDAP/SASL and verified LDAPS with `tls-endpoint` channel binding must succeed,
+while LDAPS without channel binding must fail with the expected authentication
+error. The script uses a temporary ticket cache and requires
+`LDAP_TEST_HOST`, `DOMAIN_CONTROLLER_IP`, `DIB_REALM`, `DNS_DOMAIN`,
+`ADMIN_USER`, `ADMIN_PASSWORD`, and `DIB_LDAP_CA_CERTIFICATE`.
+See [GSSAPI troubleshooting](../docs/troubleshooting.md#gssapi-binds-over-ldaps-fail-with-80090346--data-35b)
+for the supported client settings.
 
 ### Open a shell in the client container
 

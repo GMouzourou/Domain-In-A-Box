@@ -7,7 +7,9 @@ Docker runs a single domain controller on one host. Choose:
 - **Docker CLI** for the core services only (AD, DNS, DHCP and NTP), without
   monitoring.
 
-Both use a macvlan network so the controller has its own LAN address. Read
+Both use a macvlan network so the controller has its own LAN address. Compose
+needs Docker Engine 28.0 or later and Docker Compose 2.36 or later, which keep
+the controller's LAN interface named `eth0` across restarts. Read
 [Networking](networking.md) first, in particular the
 [host-to-container limitation](networking.md#host-to-container-limitation).
 
@@ -23,34 +25,43 @@ cp .env.example .env
 
 Edit `.env`:
 
-- Set `DIB_REALM` (for example `AD.HOME.ARPA`) and `DIB_DOMAIN` (the NetBIOS
-  name, for example `AD`).
-- Set unique values for `DIB_DOMAIN_ADMIN_PASSWORD`, `DIB_LDAP_PASSWORD` and
-  `STORK_DATABASE_PASSWORD`.
+- Set `DIB_REALM` (for example `AD.HOME.ARPA`). The NetBIOS name
+  `DIB_DOMAIN` defaults to the realm's first label (`AD`).
+- Set `DIB_DOMAIN_ADMIN_PASSWORD`. Compose passes it to the controller as a
+  secret file, so it does not appear in the container's environment.
 - Set `DIB_PARENT_INTERFACE` to the host interface on your LAN (for example
   `eth0` or `enp3s0`). Leave `DIB_INTERFACE` as `eth0`, the interface name
   inside the container.
+- Set the LAN addresses:
+
+  | Variable | Default | Meaning |
+  | --- | --- | --- |
+  | `DIB_LAN_SUBNET` | `192.168.1.0/24` | LAN subnet |
+  | `DIB_LAN_GATEWAY` | `192.168.1.254` | LAN gateway |
+  | `DIB_CONTROLLER_IP` | `192.168.1.1` | Controller address |
+  | `DIB_STORK_IP` | `192.168.1.3` | Stork web UI address |
+
+  Issue the certificates for these addresses.
 - Set `DIB_DHCP_POOL` to a free range and `DIB_DNS_FORWARDERS` to your upstream
   resolvers.
 
-Edit the addresses in `docker-compose.yml` to match your LAN:
+The Stork LDAP and database passwords are generated on first start by the
+one-shot `secrets` service and kept in the `dib-secrets` volume. Set
+`DIB_LDAP_PASSWORD` or `STORK_DATABASE_PASSWORD` only if you want your own
+values, for example for an external database.
 
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| `networks.domain_net.ipam.config.subnet` | `192.168.1.0/24` | LAN subnet |
-| `networks.domain_net.ipam.config.gateway` | `192.168.1.254` | LAN gateway |
-| `domain-controller` `ipv4_address` | `192.168.1.1` | Controller address |
-| `postgres` `ipv4_address` | `192.168.1.2` | Bundled database address |
-| `stork-server` `ipv4_address` | `192.168.1.3` | Stork web UI address |
+Compose runs the controller as root with an explicit capability profile, not
+`privileged`. See [container security](kubernetes.md#container-security) for its
+limits. Set `DIB_PRIVILEGED=true` only as a deliberate compatibility escape hatch
+after investigating an unsupported host/runtime; this grants substantially
+broader host access. It is a Compose setting, not a bootstrap environment variable.
 
-If you change the controller or Stork address, also set `STORK_LDAP_URL`
-(default `ldaps://192.168.1.1:636`), `STORK_SERVER_HOST` and
-`STORK_DATABASE_HOST` in `.env`, and issue the certificates for the new
-addresses.
-
-The bundled PostgreSQL service currently has a LAN address and accepts
-unencrypted connections, protected by its password. Keep that password strong.
-Tracking: [#46](https://github.com/GMouzourou/Domain-In-A-Box/issues/46).
+The bundled PostgreSQL service has no LAN address. It is attached only to the
+internal `stork_database_net` bridge network (`172.31.255.0/29`, database at
+`172.31.255.2`), which the controller and the Stork server also join, so LAN
+clients cannot reach the database. If that range overlaps a network the
+controller must reach, change the subnet, the PostgreSQL address and
+`STORK_DATABASE_HOST` together in `docker-compose.yml`.
 
 ### 2. Add certificates
 
@@ -93,7 +104,8 @@ Users get read-only access.
 | `stork-config` | `/etc/stork` | Stork agent configuration |
 | `stork-data` | `/var/lib/stork-agent` | Stork agent certificates, key, token and registration marker |
 | `log-data` | `/var/log` | Service logs |
-| `postgres-data` | PostgreSQL data | Stork database |
+| `postgres-data` | `/var/lib/postgresql` | Stork database |
+| `dib-secrets` | `/run/dib-secrets` | Generated Stork LDAP and database passwords |
 
 Replace any named volume with a host path (for example
 `/srv/dib/samba:/var/lib/samba`) if you prefer direct access.
@@ -138,12 +150,16 @@ docker network create -d macvlan \
 docker run -d \
   --name domain-in-a-box \
   --restart unless-stopped \
-  --privileged \
+  --cap-drop ALL \
+  --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add DAC_READ_SEARCH \
+  --cap-add FOWNER --cap-add FSETID --cap-add SETGID --cap-add SETUID \
+  --cap-add SETPCAP --cap-add NET_BIND_SERVICE --cap-add NET_ADMIN \
+  --cap-add NET_RAW --cap-add SYS_CHROOT --cap-add SYS_PTRACE \
+  --cap-add SYS_ADMIN --cap-add SETFCAP --cap-add KILL \
   --network domain_net \
   --ip 192.168.1.1 \
   --hostname domain-server \
   -e DIB_REALM="AD.HOME.ARPA" \
-  -e DIB_DOMAIN="AD" \
   -e DIB_DOMAIN_ADMIN_PASSWORD \
   -e DIB_INTERFACE="eth0" \
   -e DIB_DHCP_POOL="192.168.1.100-192.168.1.199" \
@@ -157,12 +173,19 @@ docker run -d \
   -v chrony-data:/var/lib/chrony \
   -v log-data:/var/log \
   -v "$PWD/certs/controller:/certs:ro" \
-  ghcr.io/gmouzourou/domain-in-a-box:0.5.1
+  ghcr.io/gmouzourou/domain-in-a-box:0.6.0
 ```
 
 `-e DIB_DOMAIN_ADMIN_PASSWORD` passes the value from your shell without
-writing it on the command line. The certificate mount is optional; omit it to
+writing it on the command line. The NetBIOS name defaults to the realm's first
+label (`AD`); add `-e DIB_DOMAIN=...` only to choose another. The certificate mount is optional; omit it to
 use Samba's self-signed certificate.
+
+Do not add `--security-opt no-new-privileges` to this controller profile:
+Kea and the Stork agent acquire required executable file capabilities after
+switching Unix users. The broad `SYS_ADMIN` capability is required for Samba
+SYSVOL ACL operations; this is not a restricted-container security boundary.
+Chrony runs without adjusting the host clock, so `SYS_TIME` is not granted.
 
 Set `parent` to the host's LAN interface. Keep `DIB_INTERFACE="eth0"`: inside
 a container attached to one macvlan network, the interface is `eth0`
