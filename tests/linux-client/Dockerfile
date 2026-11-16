@@ -1,7 +1,15 @@
 # Linux test client for testing Active Directory integration
 # This client will attempt to join the domain and validate AD functionality
 # Uses dbus-launch for realm operations (no systemd required)
-FROM ubuntu:26.04@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96
+FROM golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d AS test-runner-builder
+
+WORKDIR /src
+COPY tests/test-runner/go.mod tests/test-runner/go.sum ./
+RUN go mod download
+COPY tests/test-runner/ ./
+RUN CGO_ENABLED=0 go build -o /out/test-runner .
+
+FROM ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -31,10 +39,7 @@ RUN apt-get update && \
     winbind \
     krb5-user \
     krb5-config \
-    isc-dhcp-client \
-    golang-go \
-    git \
-    build-essential && \
+    isc-dhcp-client && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -47,10 +52,7 @@ RUN groupadd -g 1001 testuser && \
     useradd -u 1001 -g testuser -s /bin/bash -m testuser && \
     echo "testuser:testpass123" | chpasswd
 
-# Copy and build Go CLI test runner (replaces shell scripts)
-COPY tests/test-runner /tests/test-runner
-WORKDIR /tests/test-runner
-RUN go mod download && go build -o /usr/local/bin/test-runner && chmod +x /usr/local/bin/test-runner
+COPY --from=test-runner-builder /out/test-runner /usr/local/bin/test-runner
 
 # Copy entrypoint script that starts dbus-daemon and DHCP client
 WORKDIR /

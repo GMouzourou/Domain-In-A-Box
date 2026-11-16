@@ -56,6 +56,13 @@ go run . run ad-linux --verbose
 CI scans pull requests with Trivy and blocks on CRITICAL or HIGH findings.
 SARIF results are uploaded when repository permissions allow it.
 
+The Compose test network uses `eth0` as its macvlan parent by default. Set
+`DIB_TEST_MACVLAN_PARENT` to another host interface when needed. CI creates an
+isolated dummy interface and uses it as the explicit parent because hosted
+runner interface names vary. Do not leave the parent empty: Docker treats an
+automatically created dummy parent as internal and omits the gateway route
+required by the controller.
+
 The test runner verifies LDAPS against system CAs by default; set
 `DIB_LDAP_CA_CERTIFICATE` when using a private CA. The isolated Compose test
 profile explicitly opts into LDAP TLS bypass for its test client.
@@ -78,6 +85,9 @@ make k8s-logs     # diagnostics into artifacts/k8s
 make k8s-down     # delete the cluster and the lab bridge
 ```
 
+Diagnostics include Service endpoints, the controller's Stork DNS lookup,
+cluster DNS and kube-proxy logs, and the node's CNI runtime state.
+
 | File | Purpose |
 | --- | --- |
 | `kind-cluster.yaml` | Single-node cluster; the DC and L2 test client use the macvlan master |
@@ -95,7 +105,8 @@ registration uses Stork's server-token flow, which also exercises the
 server-to-agent TLS ping. `stork-management-test.py` additionally authenticates
 through AD by default and calls Stork's live machine-state API, requiring active monitored
 BIND and Kea daemons and exactly one registered machine before and after
-restarts. HTTPS with an untrusted root or incorrect hostname must fail.
+restarts. It retries TCP connections briefly after rollouts, without replaying
+HTTP requests. HTTPS with an untrusted root or incorrect hostname must fail.
 The default kind setup is single-node. Set `KIND_CONFIG` to a kind configuration
 with an additional worker and `STORK_TEST_NODE` to that worker's hostname to
 run the same-node checks and then repeat live callbacks with Stork on the

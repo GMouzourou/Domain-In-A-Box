@@ -1,4 +1,4 @@
-FROM golang:1.27@sha256:ec47ea3725fea0cc88f6de94919aef19f40f12fc1ec0e2d1b3426dbf15ecca04 AS go-source
+FROM golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d AS go-source
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -18,7 +18,7 @@ FROM go-source AS bridge-go-builder
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -o /out/dib-external-dns-bridge ./cmd/dib-external-dns-bridge
 
-FROM ubuntu:26.04@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96 AS native-build-base
+FROM ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db AS native-build-base
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive
@@ -76,7 +76,7 @@ RUN wget --progress=dot:giga -O /tmp/samba-source.tar.gz "https://gitlab.com/sam
     install -D /out-smb-prometheus /out/smb_prometheus_endpoint && \
     rm -rf /tmp/samba-source /tmp/samba-source.tar.gz /out-smb-prometheus
 
-FROM ubuntu:26.04@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96 AS stork-package-base
+FROM ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db AS stork-package-base
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -140,7 +140,7 @@ EXPOSE 80 443
 ENTRYPOINT ["/usr/local/bin/dib-observability-ctl"]
 CMD ["run"]
 
-FROM ubuntu:26.04@sha256:065aa8626841f16057b78b027b464cd59c4fac36c204c72dcbf48d66f5fa8a96 AS external-dns-bridge
+FROM ubuntu:26.04@sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db AS external-dns-bridge
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \

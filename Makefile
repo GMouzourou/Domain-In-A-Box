@@ -14,10 +14,11 @@ DEV_COMPOSE = $(COMPOSE) -f docker-compose.yml
 SHELL_SCRIPTS = tests/linux-client/entrypoint.sh tests/linux-client/ldap-gssapi-test.sh tests/kubernetes/lab.sh tests/kubernetes/helm-chart-test.sh
 HADOLINT_IMAGE = hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d
 HADOLINT_IGNORES = --ignore DL3008 --ignore DL3015 --ignore DL3018
+GOVULNCHECK_VERSION = v1.9.0
 
 .PHONY: help build build-stork build-bridge build-test-client \
 	test-unit test-all test-prebuilt test-clean test-verbose test-health test-dns test-dhcp test-ad test-ad-linux \
-	lint version-check release-version go-lint shellcheck hadolint docker-lint helm-lint markdown-link-check \
+	lint version-check release-version go-lint go-mod-check go-vulncheck shellcheck hadolint docker-lint helm-lint markdown-link-check \
 	k8s-all k8s-up k8s-images k8s-build k8s-load k8s-deploy k8s-test k8s-logs k8s-down \
 	dev-up dev-down dev-logs dev-exec clean
 
@@ -85,6 +86,14 @@ go-lint: ## Lint and format-check both Go modules with golangci-lint
 	@command -v golangci-lint >/dev/null 2>&1 || { echo "golangci-lint is required" >&2; exit 1; }
 	golangci-lint run ./...
 	cd tests/test-runner && golangci-lint run ./...
+
+go-mod-check: ## Check both Go module files without changing them
+	go mod tidy -diff
+	cd tests/test-runner && go mod tidy -diff
+
+go-vulncheck: ## Scan both Go modules and their tests for reachable vulnerabilities
+	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -test ./...
+	cd tests/test-runner && go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) -test ./...
 
 shellcheck: ## Lint the shell scripts
 	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck is required" >&2; exit 1; }

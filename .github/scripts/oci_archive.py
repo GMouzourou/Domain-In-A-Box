@@ -8,7 +8,7 @@ import sys
 import tarfile
 
 
-SKOPEO_IMAGE = "quay.io/skopeo/stable:v1.21.0@sha256:a585e4a3b8a045baa87c7f1b2f940d6d299ebede85ab3f2419d52d2264eefc93"
+SKOPEO_IMAGE = "quay.io/skopeo/stable:v1.24.1@sha256:9fdeeda2801cf93a0a15bfb2154e44a0c5a0f3650e54586165bd1b732e503702"
 
 
 def inspect_archive(path):
